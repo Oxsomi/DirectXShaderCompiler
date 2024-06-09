@@ -1,7 +1,10 @@
 from conan import ConanFile
 from conan.tools.cmake import CMakeToolchain, CMake, cmake_layout, CMakeDeps
 from conan.tools.scm import Git
+from conan.tools.files import collect_libs
 import os
+
+required_conan_version = ">=2.0"
 
 class dxcompiler(ConanFile):
 
@@ -16,7 +19,7 @@ class dxcompiler(ConanFile):
 	topics = ("hlsl", "dxil", "shader-programs", "directx-shader-compiler")
 
 	# Binary configuration
-	settings = "os", "cppstd", "compiler", "build_type", "arch"
+	settings = "os", "compiler", "build_type", "arch"
 	options = { "relaxFloat": [ True, False ], "enableSIMD": [ True, False ] }
 	default_options = { "relaxFloat": False, "enableSIMD": True }
 
@@ -24,6 +27,10 @@ class dxcompiler(ConanFile):
 
 	def layout(self):
 		cmake_layout(self)
+
+	def configure(self):
+		self.settings.rm_safe("compiler.cppstd")
+		self.settings.rm_safe("compiler.libcxx")
 
 	def generate(self):
 
@@ -49,6 +56,7 @@ class dxcompiler(ConanFile):
 		tc.variables["HLSL_OPTIONAL_PROJS_IN_DEFAULT"] = False
 		tc.variables["LLVM_ENABLE_TERMINFO"] = False
 		tc.variables["BUILD_SHARED_LIBS"] = False
+		tc.variables["LLVM_INCLUDE_TESTS"] = False
 
 		tc.variables["LLVM_ENABLE_RTTI"] = True
 		tc.variables["LLVM_ENABLE_EH"] = True
@@ -63,6 +71,8 @@ class dxcompiler(ConanFile):
 		tc.variables["LLVM_LIT_ARGS"] = "-v"
 		tc.variables["LLVM_TARGETS_TO_BUILD"] = "None"
 		tc.variables["LLVM_DEFAULT_TARGET_TRIPLE"] = "dxil-ms-dx"
+
+		tc.cache_variables["CMAKE_CONFIGURATION_TYPES"] = str(self.settings.build_type)
 
 		tc.generate()
 

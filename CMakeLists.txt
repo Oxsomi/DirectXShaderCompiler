@@ -146,6 +146,7 @@ if (${ENABLE_SPIRV_CODEGEN})
   add_definitions(-DENABLE_SPIRV_CODEGEN)
 endif()
 if (${ENABLE_DXC_STATIC_LINKING})
+  message("-- Enabling experimental DXC static linking")
   add_definitions(-DENABLE_DXC_STATIC_LINKING)
 endif()
 # SPIRV change ends
