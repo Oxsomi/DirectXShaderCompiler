@@ -6,9 +6,9 @@ import os
 
 required_conan_version = ">=2.0"
 
-class dxcompiler(ConanFile):
+class dxc(ConanFile):
 
-	name = "dxcompiler"
+	name = "dxc"
 	version = "2024.06.09"
 
 	# Optional metadata
@@ -89,7 +89,7 @@ class dxcompiler(ConanFile):
 
 	def package(self):
 		cmake = CMake(self)
-		cmake.build(target="install-distribution")
+		cmake.build(target="dxcompiler")
 		copy(self, "*.lib", "lib", "../../p/lib")
 		copy(self, "*.a", "lib", "../../p/lib")
 		copy(self, "*.lib", "Release/lib", "../../p/lib")
@@ -98,8 +98,8 @@ class dxcompiler(ConanFile):
 		copy(self, "*.hpp", "includes", "../../p/includes")
 
 	def package_info(self):
-		self.cpp_info.components["dxcompiler"].libs = ["dxcompiler"]
-		self.cpp_info.set_property("cmake_file_name", "dxcompiler")
-		self.cpp_info.set_property("cmake_target_name", "dxcompiler")
-		self.cpp_info.set_property("pkg_config_name", "dxcompiler")
+		self.cpp_info.components["dxc"].libs = ["dxcompiler"]
+		self.cpp_info.set_property("cmake_file_name", "dxc")
+		self.cpp_info.set_property("cmake_target_name", "dxc::dxc")
+		self.cpp_info.set_property("pkg_config_name", "dxc")
 		self.cpp_info.libs = collect_libs(self)
