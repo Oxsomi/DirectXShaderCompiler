@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.tools.cmake import CMakeToolchain, CMake, cmake_layout, CMakeDeps
 from conan.tools.scm import Git
-from conan.tools.files import collect_libs
+from conan.tools.files import collect_libs, copy
 import os
 
 required_conan_version = ">=2.0"
@@ -20,8 +20,6 @@ class dxcompiler(ConanFile):
 
 	# Binary configuration
 	settings = "os", "compiler", "build_type", "arch"
-	options = { "relaxFloat": [ True, False ], "enableSIMD": [ True, False ] }
-	default_options = { "relaxFloat": False, "enableSIMD": True }
 
 	exports_sources = "include/dxc/*"
 
@@ -92,9 +90,16 @@ class dxcompiler(ConanFile):
 	def package(self):
 		cmake = CMake(self)
 		cmake.build(target="install-distribution")
+		copy(self, "*.lib", "lib", "../../p/lib")
+		copy(self, "*.a", "lib", "../../p/lib")
+		copy(self, "*.lib", "Release/lib", "../../p/lib")
+		copy(self, "*.a", "Debug/lib", "../../p/lib")
+		copy(self, "*.h", "includes", "../../p/includes")
+		copy(self, "*.hpp", "includes", "../../p/includes")
 
 	def package_info(self):
-		self.cpp_info.set_property("cmake_file_name", "dxc")
-		self.cpp_info.set_property("cmake_target_name", "dxc")
-		self.cpp_info.set_property("pkg_config_name", "dxc")
+		self.cpp_info.components["dxcompiler"].libs = ["dxcompiler"]
+		self.cpp_info.set_property("cmake_file_name", "dxcompiler")
+		self.cpp_info.set_property("cmake_target_name", "dxcompiler")
+		self.cpp_info.set_property("pkg_config_name", "dxcompiler")
 		self.cpp_info.libs = collect_libs(self)
