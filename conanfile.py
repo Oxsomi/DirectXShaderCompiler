@@ -92,8 +92,10 @@ class dxc(ConanFile):
 		cmake.build(target="dxcompiler")
 		copy(self, "*.lib", "lib", "../../p/lib")
 		copy(self, "*.a", "lib", "../../p/lib")
-		copy(self, "*.lib", "*/lib", "../../p/lib")
-		copy(self, "*.a", "*/lib", "../../p/lib")
+		copy(self, "*.lib", "Release/lib", "../../p/lib")
+		copy(self, "*.a", "Release/lib", "../../p/lib")
+		copy(self, "*.lib", "Debug/lib", "../../p/lib")
+		copy(self, "*.a", "Debug/lib", "../../p/lib")
 		copy(self, "*.h", "../DirectXShaderCompiler/include/dxc", "../../p/include/dxc")
 		copy(self, "*.hpp", "../DirectXShaderCompiler/include/dxc", "../../p/include/dxc")
 
