@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(MSVC)
-	add_compile_options(/MD /MP /GR /Gy)
+	add_compile_options(/MT /MP /GR /Gy)
 endif()
 
 if (NOT "${DXC_CMAKE_BEGINS_INCLUDE}" STREQUAL "")
