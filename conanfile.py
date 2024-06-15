@@ -72,6 +72,8 @@ class dxc(ConanFile):
 
 		tc.cache_variables["CMAKE_CONFIGURATION_TYPES"] = str(self.settings.build_type)
 
+		tc.variables["CMAKE_MSVC_RUNTIME_LIBRARY"] = "MultiThreaded"
+
 		tc.generate()
 
 	def source(self):
