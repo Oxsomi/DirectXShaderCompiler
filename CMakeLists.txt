@@ -4,6 +4,10 @@ cmake_minimum_required(VERSION 3.17.2) # HLSL Change - Require CMake 3.17.2.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+	add_compile_options(/MD /MP /GR /Gy)
+endif()
+
 if (NOT "${DXC_CMAKE_BEGINS_INCLUDE}" STREQUAL "")
   include(${DXC_CMAKE_BEGINS_INCLUDE})
 endif()
