@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.tools.cmake import CMakeToolchain, CMake, cmake_layout, CMakeDeps
 from conan.tools.scm import Git
-from conan.tools.files import collect_libs, copy
+from conan.tools.files import collect_libs, copy, rename
 import os
 
 required_conan_version = ">=2.0"
@@ -90,19 +90,45 @@ class dxc(ConanFile):
 		cmake.build()
 
 	def package(self):
+
 		cmake = CMake(self)
 		cmake.build(target="dxcompiler")
-		copy(self, "*.lib", "lib", "../../p/lib")
-		copy(self, "*.a", "lib", "../../p/lib")
-		copy(self, "*.lib", "Release/lib", "../../p/lib")
-		copy(self, "*.a", "Release/lib", "../../p/lib")
+
+		# First do a copy for all debug libs
+		# So that we can rename them all at once to suffixed by D
+		# Apparently it looks for dxcompilerD.lib/.a rather than dxcompiler.lib/.a
+
+		copy(self, "*.lib", "lib/Debug", "../../p/lib")
+		copy(self, "*.a", "lib/Debug", "../../p/lib")
 		copy(self, "*.lib", "Debug/lib", "../../p/lib")
 		copy(self, "*.a", "Debug/lib", "../../p/lib")
+		
+		directory = "../../p/lib"
+
+		if os.path.isfile(directory):
+			for filename in os.listdir(directory):
+				f = os.path.join(directory, filename)
+				if os.path.isfile(f):
+					offset = f.rfind(".")
+					rename(self, f, f[:offset] + "d." + f[offset+1:])
+
+		# Copy release libs
+
+		copy(self, "*.lib", "lib/Release", "../../p/lib")
+		copy(self, "*.a", "lib/Release", "../../p/lib")
+		copy(self, "*.lib", "Release/lib", "../../p/lib")
+		copy(self, "*.a", "Release/lib", "../../p/lib")
+
+		# Headers
+
 		copy(self, "*.h", "../DirectXShaderCompiler/include/dxc", "../../p/include/dxc")
 		copy(self, "*.hpp", "../DirectXShaderCompiler/include/dxc", "../../p/include/dxc")
 
 	def package_info(self):
-		self.cpp_info.components["dxc"].libs = [
+		self.cpp_info.set_property("cmake_file_name", "dxc")
+		self.cpp_info.set_property("cmake_target_name", "dxc::dxc")
+		self.cpp_info.set_property("pkg_config_name", "dxc")
+		self.cpp_info.libs = [
 			"dxcompiler",
 			"clangAnalysis",
 			"clangAST",
@@ -153,9 +179,7 @@ class dxc(ConanFile):
 			"LLVMTableGen",
 			"LLVMTarget",
 			"LLVMTransformUtils",
-			"LLVMVectorize"
+			"LLVMVectorize",
+			"SPIRV-Tools",
+			"SPIRV-Tools-opt"
 		]
-		self.cpp_info.set_property("cmake_file_name", "dxc")
-		self.cpp_info.set_property("cmake_target_name", "dxc::dxc")
-		self.cpp_info.set_property("pkg_config_name", "dxc")
-		self.cpp_info.libs = collect_libs(self)
