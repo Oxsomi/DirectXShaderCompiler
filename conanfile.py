@@ -123,7 +123,6 @@ class dxc(ConanFile):
 			"clangSPIRV",
 			"clangTooling",
 			"clangToolingCore",
-			"dxcompiler",
 			"libclang",
 			"LLVMAnalysis",
 			"LLVMAsmParser",
