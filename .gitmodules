@@ -1,12 +1,12 @@
 [submodule "external/SPIRV-Headers"]
 	path = external/SPIRV-Headers
-	url = https://github.com/KhronosGroup/SPIRV-Headers
+	url = https://github.com/Oxsomi/SPIRV-Headers
 [submodule "external/SPIRV-Tools"]
 	path = external/SPIRV-Tools
-	url = https://github.com/KhronosGroup/SPIRV-Tools
+	url = https://github.com/Oxsomi/SPIRV-Tools
 [submodule "external/googletest"]
 	path = external/googletest
 	url = https://github.com/google/googletest
 [submodule "external/DirectX-Headers"]
 	path = external/DirectX-Headers
-	url = https://github.com/microsoft/DirectX-Headers.git
+	url = https://github.com/Oxsomi/DirectX-Headers.git
