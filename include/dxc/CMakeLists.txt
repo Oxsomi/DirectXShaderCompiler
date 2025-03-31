@@ -1,5 +1,3 @@
-include(HCT)
-
 add_hlsl_hctgen(HLSLIntrinsicOp OUTPUT HlslIntrinsicOp.h)
 
 set(HLSL_TEST_DATA_DIR ${LLVM_SOURCE_DIR}/tools/clang/test/HLSL/)
