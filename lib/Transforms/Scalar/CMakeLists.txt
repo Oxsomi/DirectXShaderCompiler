@@ -1,5 +1,6 @@
 # HLSL Change
 
+include(HCT)
 add_hlsl_hctgen(DxcOptimizer OUTPUT DxcOptimizer.inc BUILD_DIR)
 
 add_llvm_library(LLVMScalarOpts

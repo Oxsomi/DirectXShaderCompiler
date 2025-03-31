@@ -2,6 +2,7 @@
 # This file is distributed under the University of Illinois Open Source License.
 # See LICENSE.TXT for details.
 
+include(HCT)
 add_hlsl_hctgen(DxilPIXPasses OUTPUT DxilPIXPasses.inc BUILD_DIR)
 
 add_llvm_library(LLVMDxilPIXPasses
