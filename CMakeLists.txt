@@ -688,6 +688,7 @@ endif()
 if(EXISTS "${LLVM_MAIN_SRC_DIR}/external")
   add_subdirectory(external) # SPIRV change
 endif()
+add_subdirectory(utils/hct)
 if(WIN32)
   include_directories(${DIRECTX_HEADER_INCLUDE_DIR}/directx)
 else()

@@ -1149,6 +1149,28 @@ def HLSLNodeObject : InheritableAttr {
     }];
 }
 
+// HLSL Ray Query Attribute
+
+def HLSLRayQueryObject : InheritableAttr {
+  let Spellings = []; // No spellings!
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [Undocumented];
+}
+
+def HLSLSubObject : InheritableAttr {
+  let Spellings = []; // No spellings!
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [Undocumented];
+  let Args = [UnsignedArgument<"SubObjKindUint">, UnsignedArgument<"HitGroupType">];
+}
+
+// HLSL HitObject Attribute
+
+def HLSLHitObject : InheritableAttr {
+  let Spellings = []; // No spellings!
+  let Subjects = SubjectList<[CXXRecord]>;
+  let Documentation = [Undocumented];
+}
 
 // HLSL Parameter Attributes
 

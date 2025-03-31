@@ -809,21 +809,17 @@ void SpirvEmitter::HandleTranslationUnit(ASTContext &context) {
   spvBuilder.setMemoryModel(spv::AddressingModel::Logical,
                             spv::MemoryModel::GLSL450);
 
-  // Even though the 'workQueue' grows due to the above loop, the first
-  // 'numEntryPoints' entries in the 'workQueue' are the ones with the HLSL
-  // 'shader' attribute, and must therefore be entry functions.
-  assert(numEntryPoints <= workQueue.size());
-
-  for (uint32_t i = 0; i < numEntryPoints; ++i) {
+  for (uint32_t i = 0; i < workQueue.size(); ++i) {
     // TODO: assign specific StageVars w.r.t. to entry point
     const FunctionInfo *entryInfo = workQueue[i];
-    assert(entryInfo->isEntryFunction);
-    spvBuilder.addEntryPoint(
-        getSpirvShaderStage(
-            entryInfo->shaderModelKind,
-            featureManager.isExtensionEnabled(Extension::EXT_mesh_shader)),
-        entryInfo->entryFunction, getEntryPointName(entryInfo),
-        getInterfacesForEntryPoint(entryInfo->entryFunction));
+    if (entryInfo->isEntryFunction) {
+      spvBuilder.addEntryPoint(
+          getSpirvShaderStage(
+              entryInfo->shaderModelKind,
+              featureManager.isExtensionEnabled(Extension::EXT_mesh_shader)),
+          entryInfo->entryFunction, getEntryPointName(entryInfo),
+          getInterfacesForEntryPoint(entryInfo->entryFunction));
+    }
   }
 
   // Add Location decorations to stage input/output variables.
@@ -1879,6 +1875,19 @@ void SpirvEmitter::doVarDecl(const VarDecl *decl) {
       // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/vkspec.html#interfaces-resources-setandbinding
       emitError("Multi-dimensional arrays of RW/append/consume structured "
                 "buffers are unsupported in Vulkan",
+                loc);
+      return;
+    }
+  }
+
+  if (featureManager.isTargetEnvVulkan() &&
+      (isTexture(decl->getType()) || isRWTexture(decl->getType()) ||
+       isBuffer(decl->getType()) || isRWBuffer(decl->getType()))) {
+    const auto sampledType = hlsl::GetHLSLResourceResultType(decl->getType());
+    if (isFloatOrVecMatOfFloatType(sampledType) &&
+        isOrContains16BitType(sampledType, spirvOptions.enable16BitTypes)) {
+      emitError("The sampled type for textures cannot be a floating point type "
+                "smaller than 32-bits when targeting a Vulkan environment.",
                 loc);
       return;
     }
@@ -3104,12 +3113,6 @@ SpirvInstruction *SpirvEmitter::processCall(const CallExpr *callExpr) {
         argInfo && argInfo->getStorageClass() != spv::StorageClass::Function &&
         isResourceType(paramType);
 
-    // HLSL requires that the parameters be copied in and out from temporaries.
-    // This looks for cases where the copy can be elided. To generate valid
-    // SPIR-V, the argument must be a memory declaration.
-    //
-    //
-
     // If argInfo is nullptr and argInst is a rvalue, we do not have a proper
     // pointer to pass to the function. we need a temporary variable in that
     // case.
@@ -3118,7 +3121,7 @@ SpirvInstruction *SpirvEmitter::processCall(const CallExpr *callExpr) {
     // create a temporary variable for it because the function definition
     // expects are point-to-pointer argument for resources, which will be
     // resolved by legalization.
-    if ((argInfo || (argInst && argInst->getopcode() == spv::Op::OpVariable)) &&
+    if ((argInfo || (argInst && !argInst->isRValue())) &&
         canActAsOutParmVar(param) && !isArgGlobalVarWithResourceType &&
         paramTypeMatchesArgType(paramType, arg->getType())) {
       // Based on SPIR-V spec, function parameter must be always Function
@@ -3657,14 +3660,16 @@ SpirvInstruction *SpirvEmitter::doCastExpr(const CastExpr *expr,
       emitError("implicit cast kind '%0' unimplemented", expr->getExprLoc())
           << expr->getCastKindName() << expr->getSourceRange();
       expr->dump();
-      return 0;
+      return nullptr;
     }
   }
+  case CastKind::CK_ToVoid:
+    return nullptr;
   default:
     emitError("implicit cast kind '%0' unimplemented", expr->getExprLoc())
         << expr->getCastKindName() << expr->getSourceRange();
     expr->dump();
-    return 0;
+    return nullptr;
   }
 }
 
@@ -8128,17 +8133,21 @@ void SpirvEmitter::assignToMSOutIndices(
   if (indices.size() > 1) {
     vecComponent = indices.back();
   }
-  auto *var = declIdMapper.getStageVarInstruction(decl);
-  const auto *varTypeDecl = astContext.getAsConstantArrayType(decl->getType());
-  QualType varType = varTypeDecl->getElementType();
+  SpirvVariable *var = declIdMapper.getMSOutIndicesBuiltin();
+
   uint32_t numVertices = 1;
-  if (!isVectorType(varType, nullptr, &numVertices)) {
-    assert(isScalarType(varType));
-  }
-  QualType valueType = value->getAstResultType();
   uint32_t numValues = 1;
-  if (!isVectorType(valueType, nullptr, &numValues)) {
-    assert(isScalarType(valueType));
+  {
+    const auto *varTypeDecl =
+        astContext.getAsConstantArrayType(decl->getType());
+    QualType varType = varTypeDecl->getElementType();
+    if (!isVectorType(varType, nullptr, &numVertices)) {
+      assert(isScalarType(varType));
+    }
+    QualType valueType = value->getAstResultType();
+    if (!isVectorType(valueType, nullptr, &numValues)) {
+      assert(isScalarType(valueType));
+    }
   }
 
   const auto loc = decl->getLocation();
@@ -8185,7 +8194,10 @@ void SpirvEmitter::assignToMSOutIndices(
       assert(numValues == numVertices);
       if (extMesh) {
         // create accesschain for Primitive*IndicesEXT[vertIndex].
-        auto *ptr = spvBuilder.createAccessChain(varType, var, vertIndex, loc);
+        const ConstantArrayType *CAT =
+            astContext.getAsConstantArrayType(var->getAstResultType());
+        auto *ptr = spvBuilder.createAccessChain(CAT->getElementType(), var,
+                                                 vertIndex, loc);
         // finally create store for Primitive*IndicesEXT[vertIndex] = value.
         spvBuilder.createStore(ptr, value, loc);
       } else {
@@ -15044,6 +15056,10 @@ void SpirvEmitter::addDerivativeGroupExecutionMode() {
   // to 2D quad rules. Using derivative operations in any numthreads
   // configuration not matching either of these is invalid and will produce an
   // error.
+  static_assert(spv::ExecutionMode::DerivativeGroupQuadsNV ==
+                spv::ExecutionMode::DerivativeGroupQuadsKHR);
+  static_assert(spv::ExecutionMode::DerivativeGroupLinearNV ==
+                spv::ExecutionMode::DerivativeGroupLinearKHR);
   spv::ExecutionMode em = spv::ExecutionMode::DerivativeGroupQuadsNV;
   if (numThreads[0] % 4 == 0 && numThreads[1] == 1 && numThreads[2] == 1) {
     em = spv::ExecutionMode::DerivativeGroupLinearNV;

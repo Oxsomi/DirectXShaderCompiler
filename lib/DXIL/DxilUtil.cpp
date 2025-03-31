@@ -574,6 +574,9 @@ bool IsHLSLObjectType(llvm::Type *Ty) {
 
     if (IsHLSLNodeIOType(Ty))
       return true;
+
+    if (IsHLSLHitObjectType(Ty))
+      return true;
   }
   return false;
 }
@@ -589,6 +592,24 @@ bool IsHLSLRayQueryType(llvm::Type *Ty) {
       return true;
   }
   return false;
+}
+
+llvm::Type *GetHLSLHitObjectType(llvm::Module *M) {
+  using namespace llvm;
+  StructType *HitObjectTy = M->getTypeByName("dx.types.HitObject");
+  if (!HitObjectTy)
+    HitObjectTy = StructType::create({Type::getInt8PtrTy(M->getContext(), 0)},
+                                     "dx.types.HitObject", false);
+  return HitObjectTy;
+}
+
+bool IsHLSLHitObjectType(llvm::Type *Ty) {
+  llvm::StructType *ST = dyn_cast<llvm::StructType>(Ty);
+  if (!ST)
+    return false;
+  if (!ST->hasName())
+    return false;
+  return ST->getName() == "dx.types.HitObject";
 }
 
 bool IsHLSLResourceDescType(llvm::Type *Ty) {
@@ -1392,6 +1413,19 @@ bool DeleteDeadAllocas(llvm::Function &F) {
   }
 
   return Changed;
+}
+
+// Retrieve dxil version in the given module.
+// Where the module doesn't already have a Dxil module,
+// it identifies and returns the version info from the metatdata.
+// Returns false where none of that works, but that shouldn't happen much.
+bool LoadDxilVersion(const Module *M, unsigned &Major, unsigned &Minor) {
+  if (M->HasDxilModule()) {
+    M->GetDxilModule().GetShaderModel()->GetDxilVersion(Major, Minor);
+    return true;
+  }
+  // No module, try metadata.
+  return DxilMDHelper::LoadDxilVersion(M, Major, Minor);
 }
 
 } // namespace dxilutil

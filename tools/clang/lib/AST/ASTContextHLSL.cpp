@@ -23,6 +23,7 @@
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/HlslBuiltinTypeDeclBuilder.h"
 #include "clang/AST/TypeLoc.h"
+#include "clang/Basic/Specifiers.h"
 #include "clang/Sema/Overload.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/SemaDiagnostic.h"
@@ -545,10 +546,19 @@ hlsl::DeclareRecordTypeWithHandle(ASTContext &context, StringRef name,
   return typeDeclBuilder.getRecordDecl();
 }
 
+AvailabilityAttr *ConstructAvailabilityAttribute(clang::ASTContext &context,
+                                                 VersionTuple Introduced) {
+  AvailabilityAttr *AAttr = AvailabilityAttr::CreateImplicit(
+      context, &context.Idents.get(""), clang::VersionTuple(6, 9),
+      clang::VersionTuple(), clang::VersionTuple(), false, "");
+  return AAttr;
+}
+
 // creates a global static constant unsigned integer with value.
 // equivalent to: static const uint name = val;
 static void AddConstUInt(clang::ASTContext &context, DeclContext *DC,
-                         StringRef name, unsigned val) {
+                         StringRef name, unsigned val,
+                         AvailabilityAttr *AAttr = nullptr) {
   IdentifierInfo &Id = context.Idents.get(name, tok::TokenKind::identifier);
   QualType type = context.getConstType(context.UnsignedIntTy);
   VarDecl *varDecl = VarDecl::Create(context, DC, NoLoc, NoLoc, &Id, type,
@@ -558,6 +568,9 @@ static void AddConstUInt(clang::ASTContext &context, DeclContext *DC,
       context, llvm::APInt(context.getIntWidth(type), val), type, NoLoc);
   varDecl->setInit(exprVal);
   varDecl->setImplicit(true);
+  if (AAttr)
+    varDecl->addAttr(AAttr);
+
   DC->addDecl(varDecl);
 }
 
@@ -570,6 +583,7 @@ static void AddConstUInt(clang::ASTContext &context, StringRef name,
 struct Enumerant {
   StringRef name;
   unsigned value;
+  AvailabilityAttr *avail = nullptr;
 };
 
 static void AddTypedefPseudoEnum(ASTContext &context, StringRef name,
@@ -585,33 +599,45 @@ static void AddTypedefPseudoEnum(ASTContext &context, StringRef name,
   enumDecl->setImplicit(true);
   // static const uint <enumerant.name> = <enumerant.value>;
   for (const Enumerant &enumerant : enumerants) {
-    AddConstUInt(context, curDC, enumerant.name, enumerant.value);
+    AddConstUInt(context, curDC, enumerant.name, enumerant.value,
+                 enumerant.avail);
   }
 }
 
 /// <summary> Adds all constants and enums for ray tracing </summary>
 void hlsl::AddRaytracingConstants(ASTContext &context) {
+
+  // Create aversion tuple for availability attributes
+  // for the RAYQUERY_FLAG enum
+  VersionTuple VT69 = VersionTuple(6, 9);
+
   AddTypedefPseudoEnum(
       context, "RAY_FLAG",
-      {
-          {"RAY_FLAG_NONE", (unsigned)DXIL::RayFlag::None},
-          {"RAY_FLAG_FORCE_OPAQUE", (unsigned)DXIL::RayFlag::ForceOpaque},
-          {"RAY_FLAG_FORCE_NON_OPAQUE",
-           (unsigned)DXIL::RayFlag::ForceNonOpaque},
-          {"RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH",
-           (unsigned)DXIL::RayFlag::AcceptFirstHitAndEndSearch},
-          {"RAY_FLAG_SKIP_CLOSEST_HIT_SHADER",
-           (unsigned)DXIL::RayFlag::SkipClosestHitShader},
-          {"RAY_FLAG_CULL_BACK_FACING_TRIANGLES",
-           (unsigned)DXIL::RayFlag::CullBackFacingTriangles},
-          {"RAY_FLAG_CULL_FRONT_FACING_TRIANGLES",
-           (unsigned)DXIL::RayFlag::CullFrontFacingTriangles},
-          {"RAY_FLAG_CULL_OPAQUE", (unsigned)DXIL::RayFlag::CullOpaque},
-          {"RAY_FLAG_CULL_NON_OPAQUE", (unsigned)DXIL::RayFlag::CullNonOpaque},
-          {"RAY_FLAG_SKIP_TRIANGLES", (unsigned)DXIL::RayFlag::SkipTriangles},
-          {"RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES",
-           (unsigned)DXIL::RayFlag::SkipProceduralPrimitives},
-      });
+      {{"RAY_FLAG_NONE", (unsigned)DXIL::RayFlag::None},
+       {"RAY_FLAG_FORCE_OPAQUE", (unsigned)DXIL::RayFlag::ForceOpaque},
+       {"RAY_FLAG_FORCE_NON_OPAQUE", (unsigned)DXIL::RayFlag::ForceNonOpaque},
+       {"RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH",
+        (unsigned)DXIL::RayFlag::AcceptFirstHitAndEndSearch},
+       {"RAY_FLAG_SKIP_CLOSEST_HIT_SHADER",
+        (unsigned)DXIL::RayFlag::SkipClosestHitShader},
+       {"RAY_FLAG_CULL_BACK_FACING_TRIANGLES",
+        (unsigned)DXIL::RayFlag::CullBackFacingTriangles},
+       {"RAY_FLAG_CULL_FRONT_FACING_TRIANGLES",
+        (unsigned)DXIL::RayFlag::CullFrontFacingTriangles},
+       {"RAY_FLAG_CULL_OPAQUE", (unsigned)DXIL::RayFlag::CullOpaque},
+       {"RAY_FLAG_CULL_NON_OPAQUE", (unsigned)DXIL::RayFlag::CullNonOpaque},
+       {"RAY_FLAG_SKIP_TRIANGLES", (unsigned)DXIL::RayFlag::SkipTriangles},
+       {"RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES",
+        (unsigned)DXIL::RayFlag::SkipProceduralPrimitives},
+       {"RAY_FLAG_FORCE_OMM_2_STATE", (unsigned)DXIL::RayFlag::ForceOMM2State,
+        ConstructAvailabilityAttribute(context, VT69)}});
+
+  AddTypedefPseudoEnum(
+      context, "RAYQUERY_FLAG",
+      {{"RAYQUERY_FLAG_NONE", (unsigned)DXIL::RayQueryFlag::None},
+       {"RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS",
+        (unsigned)DXIL::RayQueryFlag::AllowOpacityMicromaps,
+        ConstructAvailabilityAttribute(context, VT69)}});
 
   AddTypedefPseudoEnum(
       context, "COMMITTED_STATUS",
@@ -673,6 +699,10 @@ void hlsl::AddRaytracingConstants(ASTContext &context) {
   AddConstUInt(
       context, StringRef("RAYTRACING_PIPELINE_FLAG_SKIP_PROCEDURAL_PRIMITIVES"),
       (unsigned)DXIL::RaytracingPipelineFlags::SkipProceduralPrimitives);
+  AddConstUInt(context, context.getTranslationUnitDecl(),
+               StringRef("RAYTRACING_PIPELINE_FLAG_ALLOW_OPACITY_MICROMAPS"),
+               (unsigned)DXIL::RaytracingPipelineFlags::AllowOpacityMicromaps,
+               ConstructAvailabilityAttribute(context, VT69));
 }
 
 /// <summary> Adds all constants and enums for sampler feedback </summary>
@@ -1045,7 +1075,7 @@ static void CreateConstructorDeclaration(
 static void CreateObjectFunctionDeclaration(
     ASTContext &context, CXXRecordDecl *recordDecl, QualType resultType,
     ArrayRef<QualType> args, DeclarationName declarationName, bool isConst,
-    CXXMethodDecl **functionDecl, TypeSourceInfo **tinfo) {
+    StorageClass SC, CXXMethodDecl **functionDecl, TypeSourceInfo **tinfo) {
   DXASSERT_NOMSG(recordDecl != nullptr);
   DXASSERT_NOMSG(functionDecl != nullptr);
 
@@ -1057,8 +1087,8 @@ static void CreateObjectFunctionDeclaration(
   *tinfo = context.getTrivialTypeSourceInfo(functionQT, NoLoc);
   DXASSERT_NOMSG(*tinfo != nullptr);
   *functionDecl = CXXMethodDecl::Create(
-      context, recordDecl, NoLoc, declNameInfo, functionQT, *tinfo,
-      StorageClass::SC_None, InlineSpecifiedFalse, IsConstexprFalse, NoLoc);
+      context, recordDecl, NoLoc, declNameInfo, functionQT, *tinfo, SC,
+      InlineSpecifiedFalse, IsConstexprFalse, NoLoc);
   DXASSERT_NOMSG(*functionDecl != nullptr);
   (*functionDecl)->setLexicalDeclContext(recordDecl);
   (*functionDecl)->setAccess(AccessSpecifier::AS_public);
@@ -1067,7 +1097,8 @@ static void CreateObjectFunctionDeclaration(
 CXXMethodDecl *hlsl::CreateObjectFunctionDeclarationWithParams(
     ASTContext &context, CXXRecordDecl *recordDecl, QualType resultType,
     ArrayRef<QualType> paramTypes, ArrayRef<StringRef> paramNames,
-    DeclarationName declarationName, bool isConst, bool isTemplateFunction) {
+    DeclarationName declarationName, bool isConst, StorageClass SC,
+    bool isTemplateFunction) {
   DXASSERT_NOMSG(recordDecl != nullptr);
   DXASSERT_NOMSG(!resultType.isNull());
   DXASSERT_NOMSG(paramTypes.size() == paramNames.size());
@@ -1075,7 +1106,7 @@ CXXMethodDecl *hlsl::CreateObjectFunctionDeclarationWithParams(
   TypeSourceInfo *tinfo;
   CXXMethodDecl *functionDecl;
   CreateObjectFunctionDeclaration(context, recordDecl, resultType, paramTypes,
-                                  declarationName, isConst, &functionDecl,
+                                  declarationName, isConst, SC, &functionDecl,
                                   &tinfo);
 
   // Create and associate parameters to method.
@@ -1161,7 +1192,14 @@ CXXRecordDecl *hlsl::DeclareRayQueryType(ASTContext &context) {
   // template<uint kind> RayQuery { ... }
   BuiltinTypeDeclBuilder typeDeclBuilder(context.getTranslationUnitDecl(),
                                          "RayQuery");
-  typeDeclBuilder.addIntegerTemplateParam("flags", context.UnsignedIntTy);
+  typeDeclBuilder.addIntegerTemplateParam("constRayFlags",
+                                          context.UnsignedIntTy);
+  // create an optional second template argument with default value
+  // that contains the value of DXIL::RayFlag::None
+  llvm::Optional<int64_t> DefaultRayQueryFlag =
+      static_cast<int64_t>(DXIL::RayFlag::None);
+  typeDeclBuilder.addIntegerTemplateParam(
+      "RayQueryFlags", context.UnsignedIntTy, DefaultRayQueryFlag);
   typeDeclBuilder.startDefinition();
   typeDeclBuilder.addField(
       "h", context.UnsignedIntTy); // Add an 'h' field to hold the handle.
@@ -1178,8 +1216,49 @@ CXXRecordDecl *hlsl::DeclareRayQueryType(ASTContext &context) {
       context.DeclarationNames.getCXXConstructorName(canQualType), false,
       &pConstructorDecl, &pTypeSourceInfo);
   typeDeclBuilder.getRecordDecl()->addDecl(pConstructorDecl);
-
+  typeDeclBuilder.getRecordDecl()->addAttr(
+      HLSLRayQueryObjectAttr::CreateImplicit(context));
   return typeDeclBuilder.getRecordDecl();
+}
+
+CXXRecordDecl *hlsl::DeclareHitObjectType(NamespaceDecl &NSDecl) {
+  ASTContext &Context = NSDecl.getASTContext();
+  // HitObject { ... }
+  BuiltinTypeDeclBuilder TypeDeclBuilder(&NSDecl, "HitObject");
+  TypeDeclBuilder.startDefinition();
+
+  // Add handle to mark as HLSL object.
+  TypeDeclBuilder.addField("h", GetHLSLObjectHandleType(Context));
+  CXXRecordDecl *RecordDecl = TypeDeclBuilder.getRecordDecl();
+
+  CanQualType canQualType = Context.getCanonicalType(
+      Context.getRecordType(TypeDeclBuilder.getRecordDecl()));
+
+  // Add constructor that will be lowered to MOP_HitObject_MakeNop.
+  CXXConstructorDecl *pConstructorDecl = nullptr;
+  TypeSourceInfo *pTypeSourceInfo = nullptr;
+  CreateConstructorDeclaration(
+      Context, RecordDecl, Context.VoidTy, {},
+      Context.DeclarationNames.getCXXConstructorName(canQualType), false,
+      &pConstructorDecl, &pTypeSourceInfo);
+  RecordDecl->addDecl(pConstructorDecl);
+  pConstructorDecl->addAttr(HLSLIntrinsicAttr::CreateImplicit(
+      Context, "op", "",
+      static_cast<int>(hlsl::IntrinsicOp::MOP_DxHitObject_MakeNop)));
+  pConstructorDecl->addAttr(HLSLCXXOverloadAttr::CreateImplicit(Context));
+
+  // Add AvailabilityAttribute for SM6.9+
+  VersionTuple VT69 = VersionTuple(6, 9);
+  RecordDecl->addAttr(ConstructAvailabilityAttribute(Context, VT69));
+
+  // Add the implicit HLSLHitObjectAttr attribute to unambiguously recognize the
+  // builtin HitObject type.
+  RecordDecl->addAttr(HLSLHitObjectAttr::CreateImplicit(Context));
+  RecordDecl->setImplicit(true);
+
+  // Add to namespace
+  RecordDecl->setDeclContext(&NSDecl);
+  return RecordDecl;
 }
 
 CXXRecordDecl *hlsl::DeclareResourceType(ASTContext &context, bool bSampler) {
