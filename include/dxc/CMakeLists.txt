@@ -1,4 +1,3 @@
-include(HCT)
 
 add_hlsl_hctgen(HLSLIntrinsicOp OUTPUT HlslIntrinsicOp.h)
 
