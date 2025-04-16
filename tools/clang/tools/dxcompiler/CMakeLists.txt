@@ -2,7 +2,6 @@
 # This file is distributed under the University of Illinois Open Source License.
 # See LICENSE.TXT for details.
 
-include(HCT)
 add_hlsl_hctgen(DxcDisassembler OUTPUT DxcDisassembler.inc BUILD_DIR)
 
 set(LLVM_LINK_COMPONENTS
