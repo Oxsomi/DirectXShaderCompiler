@@ -4,6 +4,7 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_CLANG_SPIRV_EMITVISITOR_H
 #define LLVM_CLANG_SPIRV_EMITVISITOR_H
@@ -49,15 +50,15 @@ public:
   EmitTypeHandler(ASTContext &astCtx, SpirvContext &spvContext,
                   const SpirvCodeGenOptions &opts, FeatureManager &featureMgr,
                   std::vector<uint32_t> *debugVec,
-                  std::vector<uint32_t> *decVec,
+                  std::vector<uint32_t> *decVec, std::vector<uint32_t> *fwdVec,
                   std::vector<uint32_t> *typesVec,
                   const std::function<uint32_t()> &takeNextIdFn)
       : astContext(astCtx), context(spvContext), featureManager(featureMgr),
         debugVariableBinary(debugVec), annotationsBinary(decVec),
-        typeConstantBinary(typesVec), takeNextIdFunction(takeNextIdFn),
-        emittedConstantInts({}), emittedConstantFloats({}),
-        emittedConstantComposites({}), emittedConstantNulls({}),
-        emittedUndef({}), emittedConstantBools() {
+        fwdDeclBinary(fwdVec), typeConstantBinary(typesVec),
+        takeNextIdFunction(takeNextIdFn), emittedConstantInts({}),
+        emittedConstantFloats({}), emittedConstantComposites({}),
+        emittedConstantNulls({}), emittedUndef({}), emittedConstantBools() {
     assert(decVec);
     assert(typesVec);
   }
@@ -120,7 +121,7 @@ public:
 
 private:
   void initTypeInstruction(spv::Op op);
-  void finalizeTypeInstruction();
+  void finalizeTypeInstruction(bool isFwdDecl = false);
 
   // Returns the result-id for the given type and decorations. If a type with
   // the same decorations have already been used, it returns the existing
@@ -161,6 +162,7 @@ private:
   std::vector<uint32_t> curDecorationInst;
   std::vector<uint32_t> *debugVariableBinary;
   std::vector<uint32_t> *annotationsBinary;
+  std::vector<uint32_t> *fwdDeclBinary;
   std::vector<uint32_t> *typeConstantBinary;
   std::function<uint32_t()> takeNextIdFunction;
 
@@ -207,7 +209,7 @@ public:
       : Visitor(opts, spvCtx), astContext(astCtx), featureManager(featureMgr),
         id(0),
         typeHandler(astCtx, spvCtx, opts, featureMgr, &debugVariableBinary,
-                    &annotationsBinary, &typeConstantBinary,
+                    &annotationsBinary, &fwdDeclBinary, &typeConstantBinary,
                     [this]() -> uint32_t { return takeNextId(); }),
         debugMainFileId(0), debugInfoExtInstId(0), debugLineStart(0),
         debugLineEnd(0), debugColumnStart(0), debugColumnEnd(0),
@@ -228,7 +230,7 @@ public:
   bool visit(SpirvEmitVertex *) override;
   bool visit(SpirvEndPrimitive *) override;
   bool visit(SpirvEntryPoint *) override;
-  bool visit(SpirvExecutionMode *) override;
+  bool visit(SpirvExecutionModeBase *) override;
   bool visit(SpirvString *) override;
   bool visit(SpirvSource *) override;
   bool visit(SpirvModuleProcessed *) override;
@@ -254,6 +256,8 @@ public:
   bool visit(SpirvConstantFloat *) override;
   bool visit(SpirvConstantComposite *) override;
   bool visit(SpirvConstantNull *) override;
+  bool visit(SpirvConvertPtrToU *) override;
+  bool visit(SpirvConvertUToPtr *) override;
   bool visit(SpirvUndef *) override;
   bool visit(SpirvCompositeConstruct *) override;
   bool visit(SpirvCompositeExtract *) override;
@@ -438,7 +442,9 @@ private:
   // All annotation instructions: OpDecorate, OpMemberDecorate, OpGroupDecorate,
   // OpGroupMemberDecorate, and OpDecorationGroup.
   std::vector<uint32_t> annotationsBinary;
-  // All type and constant instructions
+  // All forward pointer type declaration instructions
+  std::vector<uint32_t> fwdDeclBinary;
+  // All other type and constant instructions
   std::vector<uint32_t> typeConstantBinary;
   // All global variable declarations (all OpVariable instructions whose Storage
   // Class is not Function)

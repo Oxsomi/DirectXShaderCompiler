@@ -26,7 +26,8 @@ add_llvm_library(LLVMScalarOpts
   ../../HLSL/DxilPatchShaderRecordBindings.cpp
   ../../HLSL/DxilNoops.cpp
   ../../HLSL/DxilPreserveAllOutputs.cpp
-  ../../HLSL/DxilRenameResourcesPass.cpp
+  ../../HLSL/DxilRenameResourcesPass.cpp	
+  ../../HLSL/DxilScalarizeVectorLoadStores.cpp 
   ../../HLSL/DxilSimpleGVNHoist.cpp
   ../../HLSL/DxilSignatureValidation.cpp
   ../../HLSL/DxilTargetLowering.cpp

@@ -851,6 +851,12 @@ def HLSLGloballyCoherent : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
+def HLSLReorderCoherent : InheritableAttr {
+  let Spellings = [CXX11<"", "reordercoherent", 2015>];
+  let Subjects = SubjectList<[Var, Function]>;
+  let Documentation = [Undocumented];
+}
+
 def HLSLShader : InheritableAttr {
   let Spellings = [CXX11<"", "shader", 2017>];
   let Args = [StringArgument<"stage">]; // one of compute, pixel, vertex, hull, domain, geometry, node
@@ -1409,7 +1415,8 @@ def VKDecorateExt : InheritableAttr {
 
 def VKDecorateIdExt : InheritableAttr {
   let Spellings = [CXX11<"vk", "ext_decorate_id">];
-  let Subjects = SubjectList<[Function, Var, ParmVar, TypedefName], ErrorDiag>;
+  let Subjects =
+      SubjectList<[Function, Var, ParmVar, Field, TypedefName], ErrorDiag>;
   let Args = [UnsignedArgument<"decorate">, VariadicExprArgument<"arguments">];
   let LangOpts = [SPIRV];
   let Documentation = [Undocumented];
@@ -1417,7 +1424,8 @@ def VKDecorateIdExt : InheritableAttr {
 
 def VKDecorateStringExt : InheritableAttr {
   let Spellings = [CXX11<"vk", "ext_decorate_string">];
-  let Subjects = SubjectList<[Function, Var, ParmVar, TypedefName], ErrorDiag>;
+  let Subjects =
+      SubjectList<[Function, Var, ParmVar, Field, TypedefName], ErrorDiag>;
   let Args = [UnsignedArgument<"decorate">, VariadicStringArgument<"arguments">];
   let LangOpts = [SPIRV];
   let Documentation = [Undocumented];
@@ -1443,6 +1451,20 @@ def VKStorageClassExt : InheritableAttr {
   let Spellings = [CXX11<"vk", "ext_storage_class">];
   let Subjects = SubjectList<[Var, ParmVar], ErrorDiag>;
   let Args = [UnsignedArgument<"stclass">];
+  let LangOpts = [SPIRV];
+  let Documentation = [Undocumented];
+}
+
+def VKBufferPointer : InheritableAttr {
+  let Spellings = [CXX11<"", "hlsl_vk_buffer_pointer", 2021>];
+  let LangOpts = [SPIRV];
+  let Documentation = [Undocumented];
+}
+
+def VKAliasedPointer : InheritableAttr {
+  let Spellings = [CXX11<"vk", "aliased_pointer">];
+  let Subjects = SubjectList<[Var, ParmVar], ErrorDiag>;
+  let Args = [];
   let LangOpts = [SPIRV];
   let Documentation = [Undocumented];
 }

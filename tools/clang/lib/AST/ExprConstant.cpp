@@ -7829,6 +7829,12 @@ bool IntExprEvaluator::VisitCastExpr(const CastExpr *E) {
       return false;
     return Success(Value, E);
   }
+
+  // HLSL Change Starts
+  case CK_VK_BufferPointerToIntegral: {
+    return false;
+    // HLSL Change Ends
+  }
   }
 
   llvm_unreachable("unknown cast resulting in integral value");

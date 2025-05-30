@@ -488,6 +488,7 @@ std::vector<uint32_t> EmitVisitor::takeBinary() {
                 debugVariableBinary.end());
   result.insert(result.end(), annotationsBinary.begin(),
                 annotationsBinary.end());
+  result.insert(result.end(), fwdDeclBinary.begin(), fwdDeclBinary.end());
   result.insert(result.end(), typeConstantBinary.begin(),
                 typeConstantBinary.end());
   result.insert(result.end(), globalVarsBinary.begin(), globalVarsBinary.end());
@@ -613,19 +614,20 @@ bool EmitVisitor::visit(SpirvEntryPoint *inst) {
   return true;
 }
 
-bool EmitVisitor::visit(SpirvExecutionMode *inst) {
+bool EmitVisitor::visit(SpirvExecutionModeBase *inst) {
   initInstruction(inst);
   curInst.push_back(getOrAssignResultId<SpirvFunction>(inst->getEntryPoint()));
   curInst.push_back(static_cast<uint32_t>(inst->getExecutionMode()));
-  if (inst->getopcode() == spv::Op::OpExecutionMode) {
-    curInst.insert(curInst.end(), inst->getParams().begin(),
-                   inst->getParams().end());
-  } else {
-    for (uint32_t param : inst->getParams()) {
-      curInst.push_back(typeHandler.getOrCreateConstantInt(
-          llvm::APInt(32, param), context.getUIntType(32),
-          /*isSpecConst */ false));
+  if (auto *exeModeId = dyn_cast<SpirvExecutionModeId>(inst)) {
+    for (SpirvInstruction *param : exeModeId->getParams()) {
+      if (auto *ConstantInst = dyn_cast<SpirvConstant>(param))
+        typeHandler.getOrCreateConstant(ConstantInst);
+      curInst.push_back(getOrAssignResultId<SpirvInstruction>(param));
     }
+  } else {
+    auto *exeMode = llvm::cast<SpirvExecutionMode>(inst);
+    ArrayRef<uint32_t> params = exeMode->getParams();
+    curInst.insert(curInst.end(), params.begin(), params.end());
   }
   finalizeInstruction(&preambleBinary);
   return true;
@@ -1016,6 +1018,28 @@ bool EmitVisitor::visit(SpirvConstantNull *inst) {
   return true;
 }
 
+bool EmitVisitor::visit(SpirvConvertPtrToU *inst) {
+  initInstruction(inst);
+  curInst.push_back(inst->getResultTypeId());
+  curInst.push_back(getOrAssignResultId<SpirvInstruction>(inst));
+  curInst.push_back(getOrAssignResultId<SpirvInstruction>(inst->getPtr()));
+  finalizeInstruction(&mainBinary);
+  emitDebugNameForInstruction(getOrAssignResultId<SpirvInstruction>(inst),
+                              inst->getDebugName());
+  return true;
+}
+
+bool EmitVisitor::visit(SpirvConvertUToPtr *inst) {
+  initInstruction(inst);
+  curInst.push_back(inst->getResultTypeId());
+  curInst.push_back(getOrAssignResultId<SpirvInstruction>(inst));
+  curInst.push_back(getOrAssignResultId<SpirvInstruction>(inst->getVal()));
+  finalizeInstruction(&mainBinary);
+  emitDebugNameForInstruction(getOrAssignResultId<SpirvInstruction>(inst),
+                              inst->getDebugName());
+  return true;
+}
+
 bool EmitVisitor::visit(SpirvUndef *inst) {
   typeHandler.getOrCreateUndef(inst);
   emitDebugNameForInstruction(getOrAssignResultId<SpirvInstruction>(inst),
@@ -1108,9 +1132,10 @@ bool EmitVisitor::visit(SpirvGroupNonUniformOp *inst) {
   initInstruction(inst);
   curInst.push_back(inst->getResultTypeId());
   curInst.push_back(getOrAssignResultId<SpirvInstruction>(inst));
-  curInst.push_back(typeHandler.getOrCreateConstantInt(
-      llvm::APInt(32, static_cast<uint32_t>(inst->getExecutionScope())),
-      context.getUIntType(32), /* isSpecConst */ false));
+  if (inst->hasExecutionScope())
+    curInst.push_back(typeHandler.getOrCreateConstantInt(
+        llvm::APInt(32, static_cast<uint32_t>(inst->getExecutionScope())),
+        context.getUIntType(32), /* isSpecConst */ false));
   if (inst->hasGroupOp())
     curInst.push_back(static_cast<uint32_t>(inst->getGroupOp()));
   for (auto *operand : inst->getOperands())
@@ -1972,7 +1997,13 @@ bool EmitVisitor::visit(SpirvIntrinsicInstruction *inst) {
     }
   }
 
-  finalizeInstruction(&mainBinary);
+  auto opcode = static_cast<spv::Op>(inst->getInstruction());
+  if ((opcode == spv::Op::OpSpecConstant || opcode == spv::Op::OpConstant) &&
+      !inst->getInstructionSet()) {
+    finalizeInstruction(&typeConstantBinary);
+  } else {
+    finalizeInstruction(&mainBinary);
+  }
   return true;
 }
 
@@ -2012,10 +2043,11 @@ void EmitTypeHandler::initTypeInstruction(spv::Op op) {
   curTypeInst.push_back(static_cast<uint32_t>(op));
 }
 
-void EmitTypeHandler::finalizeTypeInstruction() {
+void EmitTypeHandler::finalizeTypeInstruction(bool isFwdDecl) {
   curTypeInst[0] |= static_cast<uint32_t>(curTypeInst.size()) << 16;
-  typeConstantBinary->insert(typeConstantBinary->end(), curTypeInst.begin(),
-                             curTypeInst.end());
+  auto binarySection = isFwdDecl ? fwdDeclBinary : typeConstantBinary;
+  binarySection->insert(binarySection->end(), curTypeInst.begin(),
+                        curTypeInst.end());
 }
 
 uint32_t EmitTypeHandler::getResultIdForType(const SpirvType *type,
@@ -2593,6 +2625,17 @@ uint32_t EmitTypeHandler::emitType(const SpirvType *type) {
     curTypeInst.push_back(static_cast<uint32_t>(ptrType->getStorageClass()));
     curTypeInst.push_back(pointeeType);
     finalizeTypeInstruction();
+  }
+  // Forward pointer types
+  else if (const auto *fwdPtrType = dyn_cast<ForwardPointerType>(type)) {
+    const SpirvPointerType *ptrType =
+        context.getForwardReference(fwdPtrType->getPointeeType());
+    const uint32_t refId = emitType(ptrType);
+    initTypeInstruction(spv::Op::OpTypeForwardPointer);
+    curTypeInst.push_back(refId);
+    curTypeInst.push_back(static_cast<uint32_t>(ptrType->getStorageClass()));
+    finalizeTypeInstruction(true);
+    return refId;
   }
   // Function types
   else if (const auto *fnType = dyn_cast<FunctionType>(type)) {

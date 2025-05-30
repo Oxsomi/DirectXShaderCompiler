@@ -200,8 +200,10 @@ void CapabilityVisitor::addCapabilityForType(const SpirvType *type,
   }
   // Pointer type
   else if (const auto *ptrType = dyn_cast<SpirvPointerType>(type)) {
-    addCapabilityForType(ptrType->getPointeeType(), loc, sc);
-    if (sc == spv::StorageClass::PhysicalStorageBuffer) {
+    addCapabilityForType(ptrType->getPointeeType(), loc,
+                         ptrType->getStorageClass());
+    if (ptrType->getStorageClass() ==
+        spv::StorageClass::PhysicalStorageBuffer) {
       addExtension(Extension::KHR_physical_storage_buffer,
                    "SPV_KHR_physical_storage_buffer", loc);
       addCapability(spv::Capability::PhysicalStorageBufferAddresses);
@@ -634,7 +636,7 @@ bool CapabilityVisitor::visit(SpirvEntryPoint *entryPoint) {
   return true;
 }
 
-bool CapabilityVisitor::visit(SpirvExecutionMode *execMode) {
+bool CapabilityVisitor::visit(SpirvExecutionModeBase *execMode) {
   spv::ExecutionMode executionMode = execMode->getExecutionMode();
   SourceLocation execModeSourceLocation = execMode->getSourceLocation();
   SourceLocation entryPointSourceLocation =
@@ -881,6 +883,9 @@ bool CapabilityVisitor::visit(SpirvModule *, Visitor::Phase phase) {
       {spv::Capability::GroupNonUniformPartitionedNV});
 
   addCapability(spv::Capability::InterpolationFunction);
+
+  addExtensionAndCapabilitiesIfEnabled(Extension::KHR_quad_control,
+                                       {spv::Capability::QuadControlKHR});
 
   return true;
 }

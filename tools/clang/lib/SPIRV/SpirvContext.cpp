@@ -328,6 +328,29 @@ const HybridPointerType *SpirvContext::getPointerType(QualType pointee,
   return result;
 }
 
+const ForwardPointerType *
+SpirvContext::getForwardPointerType(QualType pointee) {
+  assert(hlsl::IsVKBufferPointerType(pointee));
+
+  auto foundPointee = forwardPointerTypes.find(pointee);
+  if (foundPointee != forwardPointerTypes.end()) {
+    return foundPointee->second;
+  }
+
+  return forwardPointerTypes[pointee] = new (this) ForwardPointerType(pointee);
+}
+
+const SpirvPointerType *SpirvContext::getForwardReference(QualType type) {
+  return forwardReferences[type];
+}
+
+void SpirvContext::registerForwardReference(
+    QualType type, const SpirvPointerType *pointerType) {
+  assert(pointerType->getStorageClass() ==
+         spv::StorageClass::PhysicalStorageBuffer);
+  forwardReferences[type] = pointerType;
+}
+
 FunctionType *
 SpirvContext::getFunctionType(const SpirvType *ret,
                               llvm::ArrayRef<const SpirvType *> param) {

@@ -4,6 +4,7 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_CLANG_SPIRV_SPIRVVISITOR_H
 #define LLVM_CLANG_SPIRV_SPIRVVISITOR_H
@@ -60,7 +61,7 @@ public:
   DEFINE_VISIT_METHOD(SpirvExtInstImport)
   DEFINE_VISIT_METHOD(SpirvMemoryModel)
   DEFINE_VISIT_METHOD(SpirvEntryPoint)
-  DEFINE_VISIT_METHOD(SpirvExecutionMode)
+  DEFINE_VISIT_METHOD(SpirvExecutionModeBase)
   DEFINE_VISIT_METHOD(SpirvString)
   DEFINE_VISIT_METHOD(SpirvSource)
   DEFINE_VISIT_METHOD(SpirvModuleProcessed)
@@ -89,6 +90,8 @@ public:
   DEFINE_VISIT_METHOD(SpirvConstantFloat)
   DEFINE_VISIT_METHOD(SpirvConstantComposite)
   DEFINE_VISIT_METHOD(SpirvConstantNull)
+  DEFINE_VISIT_METHOD(SpirvConvertPtrToU)
+  DEFINE_VISIT_METHOD(SpirvConvertUToPtr)
   DEFINE_VISIT_METHOD(SpirvUndef)
   DEFINE_VISIT_METHOD(SpirvCompositeConstruct)
   DEFINE_VISIT_METHOD(SpirvCompositeExtract)

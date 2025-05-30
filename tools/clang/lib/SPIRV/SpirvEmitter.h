@@ -4,6 +4,7 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
 //===----------------------------------------------------------------------===//
 //
 //  This file defines a SPIR-V emitter class that takes in HLSL AST and emits
@@ -79,6 +80,9 @@ public:
   void doDecl(const Decl *decl);
   void doStmt(const Stmt *stmt, llvm::ArrayRef<const Attr *> attrs = {});
   SpirvInstruction *doExpr(const Expr *expr, SourceRange rangeOverride = {});
+  SpirvInstruction *doExprEnsuringRValue(const Expr *expr,
+                                         SourceLocation location,
+                                         SourceRange range);
 
   /// Processes the given expression and emits SPIR-V instructions. If the
   /// result is a GLValue, does an additional load.
@@ -491,6 +495,15 @@ private:
   /// Processes the 'lit' intrinsic function.
   SpirvInstruction *processIntrinsicLit(const CallExpr *);
 
+  /// Processes the 'vk::static_pointer_cast' and 'vk_reinterpret_pointer_cast'
+  /// intrinsic functions.
+  SpirvInstruction *processIntrinsicPointerCast(const CallExpr *,
+                                                bool isStatic);
+
+  /// Processes the vk::BufferPointer intrinsic function 'Get'.
+  SpirvInstruction *
+  processIntrinsicGetBufferContents(const CXXMemberCallExpr *);
+
   /// Processes the 'GroupMemoryBarrier', 'GroupMemoryBarrierWithGroupSync',
   /// 'DeviceMemoryBarrier', 'DeviceMemoryBarrierWithGroupSync',
   /// 'AllMemoryBarrier', and 'AllMemoryBarrierWithGroupSync' intrinsic
@@ -657,6 +670,10 @@ private:
   SpirvInstruction *processWaveQuadWideShuffle(const CallExpr *,
                                                hlsl::IntrinsicOp op);
 
+  /// Processes SM6.7 quad any/all.
+  SpirvInstruction *processWaveQuadAnyAll(const CallExpr *,
+                                          hlsl::IntrinsicOp op);
+
   /// Generates the Spir-V instructions needed to implement the given call to
   /// WaveActiveAllEqual. Returns a pointer to the instruction that produces the
   /// final result.
@@ -764,12 +781,28 @@ private:
   SpirvInstruction *processCooperativeMatrixGetLength(const CallExpr *call);
 
   /// Process vk::ext_execution_mode intrinsic
-  SpirvInstruction *processIntrinsicExecutionMode(const CallExpr *expr,
-                                                  bool useIdParams);
+  SpirvInstruction *processIntrinsicExecutionMode(const CallExpr *expr);
+  /// Process vk::ext_execution_mode_id intrinsic
+  SpirvInstruction *processIntrinsicExecutionModeId(const CallExpr *expr);
 
   /// Processes the 'firstbit{high|low}' intrinsic functions.
   SpirvInstruction *processIntrinsicFirstbit(const CallExpr *,
                                              GLSLstd450 glslOpcode);
+
+  SpirvInstruction *
+  processMatrixDerivativeIntrinsic(hlsl::IntrinsicOp hlslOpcode,
+                                   const Expr *arg, SourceLocation loc,
+                                   SourceRange range);
+
+  SpirvInstruction *processDerivativeIntrinsic(hlsl::IntrinsicOp hlslOpcode,
+                                               const Expr *arg,
+                                               SourceLocation loc,
+                                               SourceRange range);
+
+  SpirvInstruction *processDerivativeIntrinsic(hlsl::IntrinsicOp hlslOpcode,
+                                               SpirvInstruction *arg,
+                                               SourceLocation loc,
+                                               SourceRange range);
 
 private:
   /// Returns the <result-id> for constant value 0 of the given type.

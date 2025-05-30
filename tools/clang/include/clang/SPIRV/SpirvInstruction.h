@@ -4,6 +4,7 @@
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
+//
 //===----------------------------------------------------------------------===//
 #ifndef LLVM_CLANG_SPIRV_SPIRVINSTRUCTION_H
 #define LLVM_CLANG_SPIRV_SPIRVINSTRUCTION_H
@@ -53,6 +54,7 @@ public:
     IK_MemoryModel,     // OpMemoryModel
     IK_EntryPoint,      // OpEntryPoint
     IK_ExecutionMode,   // OpExecutionMode
+    IK_ExecutionModeId, // OpExecutionModeId
     IK_String,          // OpString (debug)
     IK_Source,          // OpSource (debug)
     IK_ModuleProcessed, // OpModuleProcessed (debug)
@@ -66,6 +68,10 @@ public:
     IK_ConstantFloat,
     IK_ConstantComposite,
     IK_ConstantNull,
+
+    // Pointer <-> uint conversions.
+    IK_ConvertPtrToU,
+    IK_ConvertUToPtr,
 
     // OpUndef
     IK_Undef,
@@ -396,12 +402,34 @@ private:
   llvm::SmallVector<SpirvVariable *, 8> interfaceVec;
 };
 
+class SpirvExecutionModeBase : public SpirvInstruction {
+public:
+  SpirvExecutionModeBase(Kind kind, spv::Op opcode, SourceLocation loc,
+                         SpirvFunction *entryPointFunction,
+                         spv::ExecutionMode executionMode)
+      : SpirvInstruction(kind, opcode, QualType(), loc),
+        entryPoint(entryPointFunction), execMode(executionMode) {}
+
+  DEFINE_RELEASE_MEMORY_FOR_CLASS(SpirvExecutionModeBase)
+
+  // For LLVM-style RTTI
+  static bool classof(const SpirvInstruction *inst) { return false; }
+
+  bool invokeVisitor(Visitor *v) override;
+
+  SpirvFunction *getEntryPoint() const { return entryPoint; }
+  spv::ExecutionMode getExecutionMode() const { return execMode; }
+
+private:
+  SpirvFunction *entryPoint;
+  spv::ExecutionMode execMode;
+};
+
 /// \brief OpExecutionMode and OpExecutionModeId instructions
-class SpirvExecutionMode : public SpirvInstruction {
+class SpirvExecutionMode : public SpirvExecutionModeBase {
 public:
   SpirvExecutionMode(SourceLocation loc, SpirvFunction *entryPointFunction,
-                     spv::ExecutionMode, llvm::ArrayRef<uint32_t> params,
-                     bool usesIdParams);
+                     spv::ExecutionMode, llvm::ArrayRef<uint32_t> params);
 
   DEFINE_RELEASE_MEMORY_FOR_CLASS(SpirvExecutionMode)
 
@@ -412,14 +440,32 @@ public:
 
   bool invokeVisitor(Visitor *v) override;
 
-  SpirvFunction *getEntryPoint() const { return entryPoint; }
-  spv::ExecutionMode getExecutionMode() const { return execMode; }
   llvm::ArrayRef<uint32_t> getParams() const { return params; }
 
 private:
-  SpirvFunction *entryPoint;
-  spv::ExecutionMode execMode;
   llvm::SmallVector<uint32_t, 4> params;
+};
+
+/// \brief OpExecutionModeId
+class SpirvExecutionModeId : public SpirvExecutionModeBase {
+public:
+  SpirvExecutionModeId(SourceLocation loc, SpirvFunction *entryPointFunction,
+                       spv::ExecutionMode em,
+                       llvm::ArrayRef<SpirvInstruction *> params);
+
+  DEFINE_RELEASE_MEMORY_FOR_CLASS(SpirvExecutionModeId)
+
+  // For LLVM-style RTTI
+  static bool classof(const SpirvInstruction *inst) {
+    return inst->getKind() == IK_ExecutionModeId;
+  }
+
+  bool invokeVisitor(Visitor *v) override;
+
+  llvm::ArrayRef<SpirvInstruction *> getParams() const { return params; }
+
+private:
+  llvm::SmallVector<SpirvInstruction *, 4> params;
 };
 
 /// \brief OpString instruction
@@ -1306,6 +1352,50 @@ public:
   bool operator==(const SpirvConstantNull &that) const;
 };
 
+class SpirvConvertPtrToU : public SpirvInstruction {
+public:
+  SpirvConvertPtrToU(SpirvInstruction *ptr, QualType type,
+                     SourceLocation loc = {}, SourceRange range = {});
+
+  DEFINE_RELEASE_MEMORY_FOR_CLASS(SpirvConvertPtrToU)
+
+  // For LLVM-style RTTI
+  static bool classof(const SpirvInstruction *inst) {
+    return inst->getKind() == IK_ConvertPtrToU;
+  }
+
+  bool operator==(const SpirvConvertPtrToU &that) const;
+
+  bool invokeVisitor(Visitor *v) override;
+
+  SpirvInstruction *getPtr() const { return ptr; }
+
+private:
+  SpirvInstruction *ptr;
+};
+
+class SpirvConvertUToPtr : public SpirvInstruction {
+public:
+  SpirvConvertUToPtr(SpirvInstruction *intValue, QualType type,
+                     SourceLocation loc = {}, SourceRange range = {});
+
+  DEFINE_RELEASE_MEMORY_FOR_CLASS(SpirvConvertUToPtr)
+
+  // For LLVM-style RTTI
+  static bool classof(const SpirvInstruction *inst) {
+    return inst->getKind() == IK_ConvertUToPtr;
+  }
+
+  bool operator==(const SpirvConvertUToPtr &that) const;
+
+  bool invokeVisitor(Visitor *v) override;
+
+  SpirvInstruction *getVal() const { return val; }
+
+private:
+  SpirvInstruction *val;
+};
+
 class SpirvUndef : public SpirvInstruction {
 public:
   SpirvUndef(QualType type);
@@ -1514,7 +1604,8 @@ private:
 /// \brief OpGroupNonUniform* instructions
 class SpirvGroupNonUniformOp : public SpirvInstruction {
 public:
-  SpirvGroupNonUniformOp(spv::Op opcode, QualType resultType, spv::Scope scope,
+  SpirvGroupNonUniformOp(spv::Op opcode, QualType resultType,
+                         llvm::Optional<spv::Scope> scope,
                          llvm::ArrayRef<SpirvInstruction *> operands,
                          SourceLocation loc,
                          llvm::Optional<spv::GroupOperation> group);
@@ -1528,7 +1619,8 @@ public:
 
   bool invokeVisitor(Visitor *v) override;
 
-  spv::Scope getExecutionScope() const { return execScope; }
+  bool hasExecutionScope() const { return execScope.hasValue(); }
+  spv::Scope getExecutionScope() const { return execScope.getValue(); }
 
   llvm::ArrayRef<SpirvInstruction *> getOperands() const { return operands; }
 
@@ -1546,7 +1638,7 @@ public:
   }
 
 private:
-  spv::Scope execScope;
+  llvm::Optional<spv::Scope> execScope;
   llvm::SmallVector<SpirvInstruction *, 4> operands;
   llvm::Optional<spv::GroupOperation> groupOp;
 };
