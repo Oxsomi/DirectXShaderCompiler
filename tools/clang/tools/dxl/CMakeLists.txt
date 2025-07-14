@@ -9,7 +9,7 @@ endif (MSVC)
 set( LLVM_LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
   DXIL
-  HLSL
+  ScalarOpts
   dxcsupport
   Option     # option library
   MSSupport  # for CreateMSFileSystemForDisk

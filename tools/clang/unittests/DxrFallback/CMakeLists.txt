@@ -9,7 +9,7 @@ set(LLVM_LINK_COMPONENTS
   dxcsupport
   dxrfallback
   dxil
-  hlsl
+  ScalarOpts
   instcombine
   ipa
   irreader
@@ -18,7 +18,6 @@ set(LLVM_LINK_COMPONENTS
   mssupport
   option
   profiledata
-  scalaropts
   support
   target
   transformutils

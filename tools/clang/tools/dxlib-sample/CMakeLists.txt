@@ -17,7 +17,7 @@ set( LLVM_LINK_COMPONENTS
   ipa
   dxcsupport
   DXIL
-  HLSL
+  ScalarOpts
   Option     # option library
   Support    # just for assert and raw streams
   )

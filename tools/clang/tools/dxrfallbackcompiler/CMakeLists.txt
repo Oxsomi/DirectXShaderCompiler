@@ -19,7 +19,7 @@ set(LLVM_LINK_COMPONENTS
   dxil
   dxilcontainer
   dxilrootsignature
-  hlsl
+  ScalarOpts
   instcombine
   ipa
   irreader
@@ -33,7 +33,6 @@ set(LLVM_LINK_COMPONENTS
   option
 #  passes
   profiledata
-  scalaropts
 #  selectiondag # no support for LLVM codegen
   support
   target

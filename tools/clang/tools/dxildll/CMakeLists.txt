@@ -11,7 +11,7 @@ set(DXCComponents
   LLVMDxilHash
   LLVMDxilRootSignature
   LLVMDxilValidation
-  LLVMHLSL       # for AreDxilResourcesDense and DxilSignatureAllocator which are used in DxilValidation
+  LLVMScalarOpts       # for AreDxilResourcesDense and DxilSignatureAllocator which are used in DxilValidation
   LLVMMSSupport
   LLVMSupport
   LLVMTransformUtils

@@ -11,7 +11,7 @@ set( LLVM_LINK_COMPONENTS
   DXIL
   DxilContainer
   DxilRootSignature
-  HLSL
+  ScalarOpts
   dxcsupport
   Option     # option library
   MSSupport  # for CreateMSFileSystemForDisk
