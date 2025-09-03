@@ -506,7 +506,7 @@ public:
                        L"Table:ShaderOpArithTable.xml#PackUnpackOpTable")
   END_TEST_METHOD()
 
-  dxc::DxcDllSupport m_support;
+  dxc::DxCompilerDllLoader m_support;
 
   bool m_D3DInitCompleted = false;
   bool m_ExperimentalModeEnabled = false;
@@ -3615,13 +3615,13 @@ struct Dispatch {
 };
 
 std::shared_ptr<st::ShaderOpTest> RunDispatch(ID3D12Device *pDevice,
-                                              dxc::DxcDllSupport &support,
+                                              dxc::SpecificDllLoader &support,
                                               st::ShaderOp *pShaderOp,
                                               const Dispatch D) {
   char compilerOptions[256];
 
   std::shared_ptr<st::ShaderOpTest> test = std::make_shared<st::ShaderOpTest>();
-  test->SetDxcSupport(&support);
+  test->SetSpecificDllLoader(&support);
   test->SetInitCallback(nullptr);
   test->SetDevice(pDevice);
 
@@ -10812,7 +10812,7 @@ TEST_F(ExecutionTest, DynamicResourcesDynamicIndexingTest) {
 void RunWaveSizeTest(UINT minWaveSize, UINT maxWaveSize,
                      std::shared_ptr<st::ShaderOpSet> ShaderOpSet,
                      CComPtr<ID3D12Device> pDevice,
-                     dxc::DxcDllSupport &m_support) {
+                     dxc::SpecificDllLoader &m_support) {
   // format shader source
   const char waveSizeTestShader[] =
       R"(struct TestData { 
@@ -10882,7 +10882,7 @@ bool TestShaderRangeAgainstRequirements(UINT shaderminws, UINT shadermaxws,
 void ExecuteWaveSizeRangeInstance(UINT minWaveSize, UINT maxWaveSize,
                                   std::shared_ptr<st::ShaderOpSet> ShaderOpSet,
                                   CComPtr<ID3D12Device> pDevice,
-                                  dxc::DxcDllSupport &m_support,
+                                  dxc::SpecificDllLoader &m_support,
                                   UINT minShaderWaveSize,
                                   UINT maxShaderWaveSize,
                                   UINT prefShaderWaveSize, bool usePreferred) {
@@ -10965,7 +10965,7 @@ void ExecuteWaveSizeRangeInstance(UINT minWaveSize, UINT maxWaveSize,
 void RunWaveSizeRangeTest(UINT minWaveSize, UINT maxWaveSize,
                           std::shared_ptr<st::ShaderOpSet> ShaderOpSet,
                           CComPtr<ID3D12Device> pDevice,
-                          dxc::DxcDllSupport &m_support) {
+                          dxc::SpecificDllLoader &m_support) {
 
   for (UINT minShaderWaveSize = 4; minShaderWaveSize <= maxWaveSize;
        minShaderWaveSize *= 2) {
@@ -12474,7 +12474,7 @@ TEST_F(ExecutionTest, QuadAnyAll) {
 // input string pointers.
 st::ShaderOpTest::TShaderCallbackFn MakeShaderReplacementCallback(
     std::vector<std::wstring> dxcArgs, std::vector<std::string> lookFors,
-    std::vector<std::string> replacements, dxc::DxcDllSupport &dllSupport) {
+    std::vector<std::string> replacements, dxc::DllLoader &dllSupport) {
 
   auto ShaderInitFn = [dxcArgs, lookFors, replacements, &dllSupport](
                           LPCSTR Name, LPCSTR pText, IDxcBlob **ppShaderBlob,
@@ -12790,7 +12790,7 @@ __declspec(dllexport) HRESULT WINAPI
     pOutputStrFn(pStrCtx, L"Unable to enable info queue for D3D.\r\n.");
   }
   try {
-    dxc::DxcDllSupport m_support;
+    dxc::DxCompilerDllLoader m_support;
     m_support.Initialize();
 
     const char *pName = nullptr;
@@ -12826,7 +12826,7 @@ __declspec(dllexport) HRESULT WINAPI
     std::shared_ptr<st::ShaderOpTest> test =
         std::make_shared<st::ShaderOpTest>();
     test->SetupRenderTarget(pShaderOp, pDevice, pCommandQueue, pRenderTarget);
-    test->SetDxcSupport(&m_support);
+    test->SetSpecificDllLoader(&m_support);
     test->RunShaderOp(pShaderOp);
     test->PresentRenderTarget(pShaderOp, pCommandQueue, pRenderTarget);
 

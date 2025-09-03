@@ -104,7 +104,7 @@ public:
   TEST_METHOD(RunRewriterFails)
   TEST_METHOD(GenerateConsistentBindings)
 
-  dxc::DxcDllSupport m_dllSupport;
+  dxc::DxCompilerDllLoader m_dllSupport;
   CComPtr<IDxcIncludeHandler> m_pIncludeHandler;
 
   struct VerifyResult {
@@ -179,7 +179,7 @@ public:
   struct FileWithBlob {
     CComPtr<IDxcBlobEncoding> BlobEncoding;
 
-    FileWithBlob(dxc::DxcDllSupport &support, LPCWSTR path) {
+    FileWithBlob(dxc::DllLoader &support, LPCWSTR path) {
       CComPtr<IDxcLibrary> library;
       IFT(support.CreateInstance(CLSID_DxcLibrary, &library));
       UINT32 codePage = CP_UTF8;
