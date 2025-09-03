@@ -1308,10 +1308,6 @@ static HRESULT DoSimpleReWrite(DxcLangExtensionsHelper *pHelper,
 
   TranslationUnitDecl *tu = astHelper.tu;
 
-  if (opts.RWOpt.ConsistentBindings) {
-    GenerateConsistentBindings(*tu, opts.AutoBindingSpace);
-  }
-
   if (opts.RWOpt.SkipStatic && opts.RWOpt.SkipFunctionBody) {
     // Remove static functions and globals.
     RemoveStaticDecls(*tu);
@@ -1330,7 +1326,7 @@ static HRESULT DoSimpleReWrite(DxcLangExtensionsHelper *pHelper,
                                  opts.RWOpt.RemoveUnusedFunctions, w);
     if (FAILED(hr))
       return hr;
-  } else if (!opts.RWOpt.ConsistentBindings) {
+  } else {
     o << "// Rewrite unchanged result:\n";
   }
 
