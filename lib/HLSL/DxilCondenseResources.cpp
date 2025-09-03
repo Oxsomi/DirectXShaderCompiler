@@ -550,7 +550,8 @@ public:
     ResourceRegisterAllocator.GatherReservedRegisters(DM);
 
     // Remove unused resources.
-    DM.RemoveResourcesWithUnusedSymbols();
+    if (!DM.GetConsistentBindings())
+      DM.RemoveResourcesWithUnusedSymbols();
 
     unsigned newResources = DM.GetCBuffers().size() + DM.GetUAVs().size() +
                             DM.GetSRVs().size() + DM.GetSamplers().size();
@@ -570,6 +571,9 @@ public:
     }
 
     bChanged |= ResourceRegisterAllocator.AllocateRegisters(DM);
+
+    if (DM.GetConsistentBindings())
+      DM.RemoveResourcesWithUnusedSymbols();
 
     // Fill in top-level CBuffer variable usage bit
     UpdateCBufferUsage();
@@ -655,7 +659,7 @@ class ResourceUseErrors {
 public:
   ResourceUseErrors() : m_bErrorsReported(false) {}
 
-  enum ErrorCode {
+  enum ErrorCode : unsigned int {
     // Collision between use of one resource GV and another.
     // All uses must be guaranteed to resolve to only one GV.
     // Additionally, when writing resource to alloca, all uses

@@ -19,7 +19,6 @@
 #ifdef LLVM_ON_WIN32
 #include "dxcetw.h"
 #endif
-#include "dxillib.h"
 
 namespace hlsl {
 HRESULT SetupRegistryPassForHLSL();
@@ -66,7 +65,6 @@ static HRESULT InitMaybeFail() throw() {
   fsSetup = true;
   IFC(hlsl::SetupRegistryPassForHLSL());
   IFC(hlsl::SetupRegistryPassForPIX());
-  IFC(DxilLibInitialize());
   if (hlsl::options::initHlslOptTable()) {
     hr = E_FAIL;
     goto Cleanup;
@@ -99,10 +97,9 @@ HRESULT __stdcall DxcInitialize() {
 #endif
 }
 
-void __stdcall DxcShutdown(BOOL isProcessTermination) {
+void __stdcall DxcShutdown() {
 
 #if defined(LLVM_ON_UNIX)
-  (void) isProcessTermination;
   DxcSetThreadMallocToDefault();
   ::hlsl::options::cleanupHlslOptTable();
   ::llvm::sys::fs::CleanupPerThreadFileSystem();
@@ -115,11 +112,6 @@ void __stdcall DxcShutdown(BOOL isProcessTermination) {
   ::hlsl::options::cleanupHlslOptTable();
   ::llvm::sys::fs::CleanupPerThreadFileSystem();
   ::llvm::llvm_shutdown();
-  if (!isProcessTermination) { // FreeLibrary has been called or the DLL load failed
-    DxilLibCleanup(DxilLibCleanUpType::UnloadLibrary);
-  } else { // Process termination. We should not call FreeLibrary()
-    DxilLibCleanup(DxilLibCleanUpType::ProcessTermination);
-  }
   DxcClearThreadMalloc();
   DxcCleanupThreadMalloc();
   DxcEtw_DXCompilerShutdown_Stop(S_OK);
@@ -137,7 +129,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD Reason, LPVOID reserved) {
   if (Reason == DLL_PROCESS_ATTACH) {
     result = SUCCEEDED(DxcInitialize());
   } else if (Reason == DLL_PROCESS_DETACH) {
-    DxcShutdown(reserved != NULL);
+    DxcShutdown();
   }
 
   return result;
