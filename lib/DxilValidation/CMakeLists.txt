@@ -1,6 +1,5 @@
 # Copyright (C) Microsoft Corporation. All rights reserved.
 # This file is distributed under the University of Illinois Open Source License. See LICENSE.TXT for details.
-
 add_hlsl_hctgen(DxilValidationInc OUTPUT DxilValidation.inc BUILD_DIR)
 add_hlsl_hctgen(DxilValidation OUTPUT DxilValidationImpl.inc BUILD_DIR)
 

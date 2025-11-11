@@ -103,7 +103,6 @@ public:
 
 struct RewriterOpts {
   bool Unchanged = false;             // OPT_rw_unchanged
-  bool ConsistentBindings = false;    // OPT_rw_consistent_bindings
   bool SkipFunctionBody = false;      // OPT_rw_skip_function_body
   bool SkipStatic = false;            // OPT_rw_skip_static
   bool GlobalExternByDefault = false; // OPT_rw_global_extern_by_default
@@ -228,7 +227,6 @@ public:
   std::string TimeTrace = "";           // OPT_ftime_trace[EQ]
   unsigned TimeTraceGranularity = 500;  // OPT_ftime_trace_granularity_EQ
   bool VerifyDiagnostics = false;       // OPT_verify
-  bool ConsistentBindings = false;      // OPT_consistent_bindings
   bool Verbose = false;                 // OPT_verbose
 
   // Optimization pass enables, disables and selects
