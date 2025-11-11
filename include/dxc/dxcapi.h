@@ -98,7 +98,7 @@ extern "C" HRESULT __stdcall DxcInitialize();
 /// \brief This function has to be called after all DXC calls (shutdown) to free everything it if it's statically linked.
 ///
 /// If dynamically linked, this will automatically be called.
-extern "C" void __stdcall DxcShutdown(BOOL isProcessTermination);
+extern "C" void __stdcall DxcShutdown();
 
 #endif
 
