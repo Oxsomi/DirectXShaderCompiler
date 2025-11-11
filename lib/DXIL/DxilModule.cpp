@@ -586,6 +586,12 @@ bool DxilModule::GetLegacyResourceReservation() const {
   return (m_IntermediateFlags & LegacyResourceReservation) != 0;
 }
 
+void DxilModule::SetKeepAllResources(bool keepAllResources) {
+  m_bKeepAllResources = keepAllResources;
+}
+
+bool DxilModule::GetKeepAllResources() const { return m_bKeepAllResources; }
+
 void DxilModule::ClearIntermediateOptions() { m_IntermediateFlags = 0; }
 
 unsigned DxilModule::GetInputControlPointCount() const {
@@ -1052,6 +1058,69 @@ void DxilModule::RemoveResourcesWithUnusedSymbols() {
   RemoveResourcesWithUnusedSymbolsHelper(m_UAVs);
   RemoveResourcesWithUnusedSymbolsHelper(m_CBuffers);
   RemoveResourcesWithUnusedSymbolsHelper(m_Samplers);
+}
+
+bool DxilModule::RemoveEmptyBuffers() {
+
+  bool mod = false;
+  unsigned resID = 0;
+  std::unordered_set<GlobalVariable *>
+      eraseList; // Need in case of duplicate defs of lib resources
+
+  for (auto p = m_CBuffers.begin(); p != m_CBuffers.end();) {
+
+    auto c = p++;
+
+    Constant *symbol = (*c)->GetGlobalSymbol();
+
+    if (!c->get()->GetSize()) {
+      p = m_CBuffers.erase(c);
+      if (GlobalVariable *GV = dyn_cast<GlobalVariable>(symbol))
+        eraseList.insert(GV);
+      mod = true;
+      continue;
+    }
+
+    if ((*c)->GetID() != resID)
+      (*c)->SetID(resID);
+
+    resID++;
+  }
+
+  for (auto gv : eraseList)
+    gv->eraseFromParent();
+
+  return mod;
+}
+
+namespace {
+template <typename TResource>
+static bool MarkResourcesUnused(std::vector<std::unique_ptr<TResource>> &vec) {
+
+  bool modif = false;
+
+  for (auto p = vec.begin(); p != vec.end();) {
+    auto c = p++;
+    Constant *symbol = (*c)->GetGlobalSymbol();
+    symbol->removeDeadConstantUsers();
+    if (symbol->user_empty()) {
+      (*c)->SetIsUnused(true);
+      modif = true;
+      continue;
+    }
+  }
+
+  return modif;
+}
+} // namespace
+
+bool DxilModule::MarkUnusedResources() {
+  bool modif = true;
+  modif |= MarkResourcesUnused(m_SRVs);
+  modif |= MarkResourcesUnused(m_UAVs);
+  modif |= MarkResourcesUnused(m_CBuffers);
+  modif |= MarkResourcesUnused(m_Samplers);
+  return modif;
 }
 
 namespace {
@@ -1533,6 +1602,7 @@ void DxilModule::LoadDxilMetadata() {
     m_bUseMinPrecision = !m_ShaderFlags.GetUseNativeLowPrecision();
     m_bDisableOptimizations = m_ShaderFlags.GetDisableOptimizations();
     m_bAllResourcesBound = m_ShaderFlags.GetAllResourcesBound();
+    m_bKeepAllResources = m_ShaderFlags.GetKeepAllResources();
     m_bResMayAlias = !m_ShaderFlags.GetResMayNotAlias();
   }
 
