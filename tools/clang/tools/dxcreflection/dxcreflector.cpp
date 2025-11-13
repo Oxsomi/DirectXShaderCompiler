@@ -42,14 +42,16 @@
 #include "dxc/Support/dxcfilesystem.h"
 #include "dxc/dxcapi.internal.h"
 
-#include "dxc/dxcreflect.h"
 #include "dxc/DxcReflection/DxcReflectionContainer.h"
+#include "dxc/dxcreflect.h"
 
+#if _WIN32
 extern "C" const IID IID_IHLSLReflectionData = {
     0x7016f834,
     0xae85,
     0x4c86,
     {0xa4, 0x73, 0x8c, 0x2c, 0x98, 0x1d, 0xd3, 0x70}};
+#endif
 
 using namespace llvm;
 using namespace clang;
@@ -668,8 +670,9 @@ struct HLSLReflectionData : public IHLSLReflectionData {
   std::vector<CHLSLFunctionParameter> FunctionParameters;
 
   HLSLReflectionData() : m_refCount(1) {}
+  virtual ~HLSLReflectionData() = default; 
 
-  //TODO: This function needs another look definitely
+  // TODO: This function needs another look definitely
   void Finalize() {
 
     Data.GenerateNameLookupTable();
@@ -698,8 +701,8 @@ struct HLSLReflectionData : public IHLSLReflectionData {
         functionParameters.push_back(i);
       }
 
-      // Filter out backward/fwd declarations for structs, unions, interfaces, functions,
-      // enums
+      // Filter out backward/fwd declarations for structs, unions, interfaces,
+      // functions, enums
 
       if (node.IsFwdDeclare()) {
         ChildCountsNonRecursive[i] = uint32_t(ChildrenNonRecursive[i].size());
@@ -794,34 +797,29 @@ struct HLSLReflectionData : public IHLSLReflectionData {
   HLSLReflectionData &operator=(HLSLReflectionData &&moved) = delete;
 
   // IUnknown
-  
-  STDMETHOD(QueryInterface)(REFIID riid, void **ppvObject) override
-  {
-      if (!ppvObject) return E_POINTER;
 
-      if (riid == IID_IUnknown || riid == IID_IHLSLReflectionData)
-      {
-          *ppvObject = static_cast<IHLSLReflectionData*>(this);
-          AddRef();
-          return S_OK;
-      }
+  STDMETHOD(QueryInterface)(REFIID riid, void **ppvObject) override {
+    if (!ppvObject)
+      return E_POINTER;
 
-      *ppvObject = nullptr;
-      return E_NOINTERFACE;
+    if (riid == IID_IHLSLReflectionData) {
+      *ppvObject = static_cast<IHLSLReflectionData *>(this);
+      AddRef();
+      return S_OK;
+    }
+
+    *ppvObject = nullptr;
+    return E_NOINTERFACE;
   }
 
-  STDMETHOD_(ULONG, AddRef)() override
-  {
-      return ++m_refCount;
-  }
+  STDMETHOD_(ULONG, AddRef)() override { return ++m_refCount; }
 
   STDMETHOD_(ULONG, Release)() override {
-      ULONG count = --m_refCount;
-      if (!count)
-          delete this;
-      return count;
+    ULONG count = --m_refCount;
+    if (!count)
+      delete this;
+    return count;
   }
-
 
   // Conversion of IReflection structs to D3D12_HLSL standardized structs
 
@@ -1692,6 +1690,8 @@ public:
   DXC_MICROCOM_TM_CTOR(DxcReflector)
   DXC_LANGEXTENSIONS_HELPER_IMPL(m_langExtensionsHelper)
 
+  virtual ~DxcReflector() = default; 
+
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid,
                                            void **ppvObject) override {
     return DoBasicQueryInterface<IHLSLReflector, IDxcLangExtensions,
@@ -1759,17 +1759,9 @@ public:
                                      errors, rewrite, msfPtr, reflection);
 
       std::vector<std::byte> Bytes;
-      std::string json;
 
-      if (SUCCEEDED(status)) {
-
+      if (SUCCEEDED(status))
         reflection.Dump(Bytes);
-
-        bool hideFileInfo = !opts.ReflOpt.ShowFileInfo;
-        bool humanFriendly = !opts.ReflOpt.ShowRawData;
-
-        json = reflection.ToJson(hideFileInfo, humanFriendly);
-      }
 
       return DxcResult::Create(
           status, DXC_OUT_OBJECT,
@@ -1844,10 +1836,11 @@ public:
       return E_UNEXPECTED;
 
     DxcThreadMalloc TM(m_pMalloc);
-    std::string str = refl->Data.ToJson(!Settings.PrintFileInfo, Settings.IsHumanReadable);
+    std::string str =
+        refl->Data.ToJson(!Settings.PrintFileInfo, Settings.IsHumanReadable);
 
-    return DxcCreateBlob(str.c_str(), str.size(), false, true, true,
-                         CP_UTF8, DxcGetThreadMallocNoRef(), ppResult);
+    return DxcCreateBlob(str.c_str(), str.size(), false, true, true, CP_UTF8,
+                         DxcGetThreadMallocNoRef(), ppResult);
   }
 };
 

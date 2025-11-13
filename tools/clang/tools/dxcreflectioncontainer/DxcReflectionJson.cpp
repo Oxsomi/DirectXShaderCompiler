@@ -291,13 +291,19 @@ static const char *NodeTypeToString(D3D12_HLSL_NODE_TYPE Type) {
                               "StaticVariable",
                               "Interface",
                               "Parameter",
-                              "If",
+                              "IfRoot",
                               "Scope",
                               "Do",
                               "Switch",
                               "While",
                               "For",
-                              "GroupsharedVariable"};
+                              "GroupsharedVariable",
+                              "Case",
+                              "Default",
+                              "Using",
+                              "IfFirst",
+                              "ElseIf",
+                              "Else"};
 
   return arr[uint32_t(Type)];
 }
@@ -357,7 +363,7 @@ static std::string BufferTypeToString(D3D_CBUFFER_TYPE Type) {
 static std::string GetBuiltinTypeName(const ReflectionData &Refl,
                                       const ReflectionVariableType &Type) {
 
-  std::string type = "<unknown>";
+  std::string type = "";
 
   if (Type.GetClass() != D3D_SVC_STRUCT &&
       Type.GetClass() != D3D_SVC_INTERFACE_CLASS) {
@@ -479,8 +485,8 @@ struct ReflectionPrintSettings {
 
 static void PrintSymbol(JsonWriter &Json, const ReflectionData &Reflection,
                         const ReflectionNodeSymbol &Sym,
-                        const ReflectionPrintSettings &Settings,
-                        bool MuteName) {
+                        const ReflectionPrintSettings &Settings, bool MuteName,
+                        bool ShowOnlyName = false) {
 
   if (Sym.GetNameId() && !MuteName) {
 
@@ -490,7 +496,7 @@ static void PrintSymbol(JsonWriter &Json, const ReflectionData &Reflection,
       Json.UIntField("NameId", Sym.GetNameId());
   }
 
-  if (Settings.HideFileInfo)
+  if (Settings.HideFileInfo || ShowOnlyName)
     return;
 
   if (Sym.HasFileSource()) {
@@ -765,8 +771,8 @@ static void PrintType(const ReflectionData &Reflection, uint32_t TypeId,
 
   const ReflectionVariableType &type = Reflection.Types[TypeId];
 
-  PrintTypeName(Reflection, TypeId, HasSymbols, Settings, Json,
-                NameForTypeName, true);
+  PrintTypeName(Reflection, TypeId, HasSymbols, Settings, Json, NameForTypeName,
+                true);
 
   if (type.GetBaseClass() != uint32_t(-1))
     Json.Object("BaseClass",
@@ -920,6 +926,29 @@ static void PrintFunction(JsonWriter &Json, const ReflectionData &Reflection,
   }
 }
 
+static void PrintValue(JsonWriter &Json, D3D12_HLSL_ENUM_TYPE type, uint64_t v,
+                       const char *Name = "Value") {
+
+  switch (type) {
+
+  case D3D12_HLSL_ENUM_TYPE_INT:
+    Json.IntField("Value", int32_t(uint32_t(v)));
+    break;
+
+  case D3D12_HLSL_ENUM_TYPE_INT64_T:
+    Json.IntField("Value", int64_t(v));
+    break;
+
+  case D3D12_HLSL_ENUM_TYPE_INT16_T:
+    Json.IntField("Value", int16_t(uint16_t(v)));
+    break;
+
+  default:
+    Json.UIntField("Value", v);
+    break;
+  }
+}
+
 static void PrintEnumValue(JsonWriter &Json, const ReflectionData &Reflection,
                            uint32_t NodeId,
                            const ReflectionPrintSettings &Settings) {
@@ -931,16 +960,7 @@ static void PrintEnumValue(JsonWriter &Json, const ReflectionData &Reflection,
   const ReflectionNode &parent = Reflection.Nodes[child.GetParentId()];
   const ReflectionEnumeration &enm = Reflection.Enums[parent.GetLocalId()];
 
-  switch (enm.Type) {
-  case D3D12_HLSL_ENUM_TYPE_INT:
-  case D3D12_HLSL_ENUM_TYPE_INT64_T:
-  case D3D12_HLSL_ENUM_TYPE_INT16_T:
-    Json.IntField("Value", val.Value);
-    break;
-
-  default:
-    Json.UIntField("Value", uint64_t(val.Value));
-  }
+  PrintValue(Json, enm.Type, val.Value);
 
   bool hasSymbols =
       Reflection.Features & D3D12_HLSL_REFLECTION_FEATURE_SYMBOL_INFO;
@@ -1067,18 +1087,41 @@ static void PrintStatement(const ReflectionData &Reflection,
   uint32_t nodesA = Stmt.GetNodeCount();
   uint32_t nodesB = node.GetChildCount() - nodesA - Stmt.HasConditionVar();
 
-  Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
-
-  bool isIf = node.GetNodeType() == D3D12_HLSL_NODE_TYPE_IF;
-
-  if (isIf)
-    Json.BoolField("HasElse", Stmt.HasElse());
+  if (Stmt.HasConditionVar())
+    Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
 
   if (nodesA)
-    Json.UIntField("NodesA", nodesA);
+    Json.UIntField("Init", nodesA);
 
   if (nodesB)
-    Json.UIntField("NodesB", nodesB);
+    Json.UIntField("Body", nodesB);
+}
+
+static void PrintIfSwitchStatement(const ReflectionData &Reflection,
+                                   const ReflectionIfSwitchStmt &Stmt,
+                                   JsonWriter &Json) {
+
+  if (Stmt.HasConditionVar())
+    Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
+
+  if (Stmt.HasElseOrDefault())
+    Json.BoolField("HasElseOrDefault", Stmt.HasElseOrDefault());
+}
+
+static void PrintBranchStatement(const ReflectionData &Reflection,
+                                 const ReflectionBranchStmt &Stmt,
+                                 JsonWriter &Json) {
+
+  if (Stmt.HasConditionVar())
+    Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
+
+  if (!Stmt.IsComplexCase()) {
+    Json.StringField("ValueType", EnumTypeToString(Stmt.GetValueType()));
+    PrintValue(Json, Stmt.GetValueType(), Stmt.GetValue());
+  }
+
+  else
+    Json.BoolField("IsComplexCase", Stmt.IsComplexCase());
 }
 
 uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
@@ -1105,7 +1148,7 @@ void PrintChildren(const ReflectionData &Data, JsonWriter &Json,
         // Put Name(Id) into current scope to hide "Symbol" everywhere.
 
         if (Data.Features & D3D12_HLSL_REFLECTION_FEATURE_SYMBOL_INFO)
-          PrintSymbol(Json, Data, Data.NodeSymbols[i], Settings, false);
+          PrintSymbol(Json, Data, Data.NodeSymbols[i], Settings, false, true);
 
         i += PrintNodeRecursive(Data, i, Json, Settings);
       }
@@ -1211,6 +1254,7 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
     [[fallthrough]];
 
   case D3D12_HLSL_NODE_TYPE_TYPEDEF:
+  case D3D12_HLSL_NODE_TYPE_USING:
 
     Json.Object("Type", [&node, &Reflection, &Json, &Settings, hasSymbols,
                          recurseType]() {
@@ -1220,13 +1264,44 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
 
     break;
 
-  case D3D12_HLSL_NODE_TYPE_IF:
-    stmtType = "If";
+  case D3D12_HLSL_NODE_TYPE_CASE:
+
+    Json.Object(
+        "Case", [&node, &Reflection, &Json, &Settings, &childrenToSkip]() {
+          const ReflectionBranchStmt &branch =
+              Reflection.BranchStatements[node.GetLocalId()];
+          if (!branch.IsComplexCase()) {
+            Json.StringField("Type", EnumTypeToString(branch.GetValueType()));
+            PrintValue(Json, branch.GetValueType(), branch.GetValue());
+          }
+        });
+
     break;
 
-  case D3D12_HLSL_NODE_TYPE_SWITCH:
-    stmtType = "Switch";
+  case D3D12_HLSL_NODE_TYPE_IF_FIRST:
+  case D3D12_HLSL_NODE_TYPE_ELSE_IF: {
+
+    const ReflectionBranchStmt &stmt = Reflection.BranchStatements[node.GetLocalId()];
+    uint32_t start = NodeId + 1;
+
+    if (stmt.HasConditionVar())
+      Json.Object("Branch", [NodeId, &Reflection, &Json, &start, &Settings,
+                         hasSymbols, &childrenToSkip]() {
+        Json.Object("Condition", [NodeId, &Reflection, &Json, &start, &Settings,
+                                  hasSymbols, &childrenToSkip]() {
+          if (hasSymbols)
+            PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
+                        Settings, false, true);
+
+          start += PrintNodeRecursive(Reflection, start, Json, Settings);
+          ++start;
+
+          childrenToSkip = start - NodeId - 1;
+        });
+      });
+
     break;
+  }
 
   case D3D12_HLSL_NODE_TYPE_FOR:
     stmtType = "For";
@@ -1237,47 +1312,68 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
     break;
   }
 
-  // If; turns into ("Condition"), ("Body"), ("Else")
   // While; turns into ("Condition"), ("Body")
   // For; turns into ("Condition"), ("Init"), ("Body")
-  // Switch; turns into ("Condition"), ("Body")
 
   if (stmtType) {
-
     Json.Object(stmtType, [&node, &Reflection, &Json, &Settings, NodeId,
-                           &childrenToSkip, nodeType]() {
+                           &childrenToSkip, nodeType, hasSymbols]() {
       const ReflectionScopeStmt &stmt =
           Reflection.Statements[node.GetLocalId()];
 
       uint32_t start = NodeId + 1;
 
       if (stmt.HasConditionVar())
-        Json.Object(
-            "Condition", [NodeId, &Reflection, &Json, &start, &Settings]() {
-              start += PrintNodeRecursive(Reflection, start, Json, Settings);
-              ++start;
-            });
+        Json.Object("Condition", [NodeId, &Reflection, &Json, &start, &Settings,
+                                  hasSymbols]() {
+          if (hasSymbols)
+            PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
+                        Settings, false, true);
+
+          start += PrintNodeRecursive(Reflection, start, Json, Settings);
+          ++start;
+        });
 
       uint32_t end = start + stmt.GetNodeCount();
 
-      bool isIf = nodeType == D3D12_HLSL_NODE_TYPE_IF;
-      const char *bodyName = isIf ? "Body" : "Init";
-
       if (stmt.GetNodeCount())
-        PrintChildren(Reflection, Json, bodyName, start, end, Settings);
+        PrintChildren(Reflection, Json, "Init", start, end, Settings);
 
-      const char *elseName = isIf ? "Else" : "Body";
+      start = end;
+      end = NodeId + 1 + node.GetChildCount();
 
-      if (stmt.HasElse() || !isIf) {
-
-        start = end;
-        end = NodeId + 1 + node.GetChildCount();
-
-        PrintChildren(Reflection, Json, elseName, start, end, Settings);
-      }
+      PrintChildren(Reflection, Json, "Body", start, end, Settings);
 
       childrenToSkip = node.GetChildCount();
     });
+  }
+
+  // Switch; turns into ("Condition"), ("Case": [])
+  // If(Root); is just a container for IfFirst/ElseIf/Else (no need to handle it here)
+
+  else if (nodeType == D3D12_HLSL_NODE_TYPE_SWITCH) {
+
+    const ReflectionIfSwitchStmt &stmt =
+        Reflection.IfSwitchStatements[node.GetLocalId()];
+
+    if (stmt.HasConditionVar())
+      Json.Object("Switch", [&stmt, &Reflection, &Json, &Settings, NodeId,
+                             &childrenToSkip, nodeType, hasSymbols]() {
+        uint32_t start = NodeId + 1;
+
+        if (stmt.HasConditionVar())
+          Json.Object("Condition", [NodeId, &Reflection, &Json, &start,
+                                    &Settings, hasSymbols]() {
+            if (hasSymbols)
+              PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
+                          Settings, false, true);
+
+            start += PrintNodeRecursive(Reflection, start, Json, Settings);
+            ++start;
+          });
+
+        childrenToSkip = start - NodeId - 1;
+      });
   }
 
   // Children
@@ -1465,6 +1561,32 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
           json.UIntField("NodeId", stat.GetNodeId());
 
           PrintStatement(*this, stat, json);
+        }
+      });
+
+      json.Array("IfSwitchStatements", [this, &json] {
+        for (uint32_t i = 0; i < uint32_t(IfSwitchStatements.size()); ++i) {
+
+          const ReflectionIfSwitchStmt &stat = IfSwitchStatements[i];
+          JsonWriter::ObjectScope valueRoot(json);
+          json.StringField(
+              "Type", NodeTypeToString(Nodes[stat.GetNodeId()].GetNodeType()));
+          json.UIntField("NodeId", stat.GetNodeId());
+
+          PrintIfSwitchStatement(*this, stat, json);
+        }
+      });
+
+      json.Array("BranchStatements", [this, &json] {
+        for (uint32_t i = 0; i < uint32_t(BranchStatements.size()); ++i) {
+
+          const ReflectionBranchStmt &stat = BranchStatements[i];
+          JsonWriter::ObjectScope valueRoot(json);
+          json.StringField(
+              "Type", NodeTypeToString(Nodes[stat.GetNodeId()].GetNodeType()));
+          json.UIntField("NodeId", stat.GetNodeId());
+
+          PrintBranchStatement(*this, stat, json);
         }
       });
     }

@@ -575,6 +575,54 @@ static DxcRegisterTypeInfo GetRegisterTypeInfo(ASTContext &ASTCtx,
   return GetTextureRegisterInfo(ASTCtx, typeName, isWrite, recordDecl);
 }
 
+// Collect array sizes in the logical order (inner dims first, then outer).
+// Example:
+//   F32[4][3]         -> {4, 3}
+//   typedef T = F32[4][3];
+//   T[2]              -> {4, 3, 2}
+[[nodiscard]] static ReflectionError
+CollectUnderlyingArraySizes(QualType &T, std::vector<uint32_t> &Out,
+                            uint64_t &FlatSize) {
+
+  T = T.getNonReferenceType();
+
+  std::vector<uint32_t> local;
+
+  while (const ConstantArrayType *arr = dyn_cast<ConstantArrayType>(T)) {
+
+    uint64_t siz = arr->getSize().getZExtValue();
+    FlatSize *= siz;
+
+    if ((FlatSize >> 32) || (siz >> 32))
+      return HLSL_REFL_ERR("Can't calculate flat array size: out of bits");
+
+    local.push_back(uint32_t(siz));
+    T = arr->getElementType().getNonReferenceType();
+  }
+
+  if (const TypedefType *td = dyn_cast<TypedefType>(T)) {
+
+    T = td->getDecl()->getUnderlyingType().getNonReferenceType();
+
+    if (T->isArrayType())
+      if (ReflectionError err = CollectUnderlyingArraySizes(T, Out, FlatSize))
+        return err;
+  }
+
+  if (const TemplateSpecializationType *ts =
+          dyn_cast<TemplateSpecializationType>(T)) {
+    QualType desugared = ts->desugar().getNonReferenceType();
+    if (desugared != T) {
+      T = desugared;
+      if (ReflectionError err = CollectUnderlyingArraySizes(T, Out, FlatSize))
+        return err;
+    }
+  }
+
+  Out.insert(Out.end(), local.begin(), local.end());
+  return ReflectionErrorSuccess;
+}
+
 [[nodiscard]] ReflectionError
 GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
                  QualType Original, bool DefaultRowMaj) {
@@ -585,17 +633,13 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
   //  then we want to maintain sugared name + array info (of sugar) for
   //  reflection but for low level type info, we would want to know float4[4]
 
-  uint32_t arraySizeUnderlying = 1;
-  QualType underlying = Original.getNonReferenceType().getCanonicalType();
+  uint64_t arraySizeUnderlying = 1;
   std::vector<uint32_t> arrayElemUnderlying;
 
-  while (const ConstantArrayType *arr =
-             dyn_cast<ConstantArrayType>(underlying)) {
-    uint32_t current = arr->getSize().getZExtValue();
-    arrayElemUnderlying.push_back(current);
-    arraySizeUnderlying *= arr->getSize().getZExtValue();
-    underlying = arr->getElementType().getNonReferenceType().getCanonicalType();
-  }
+  QualType underlying = Original;
+  if (ReflectionError err = CollectUnderlyingArraySizes(
+          underlying, arrayElemUnderlying, arraySizeUnderlying))
+    return err;
 
   uint32_t arraySizeDisplay = 1;
   std::vector<uint32_t> arrayElemDisplay;
@@ -1410,6 +1454,31 @@ AddFunctionParameter(ASTContext &ASTCtx, QualType Type, Decl *Decl,
   return ReflectionErrorSuccess;
 }
 
+static D3D12_HLSL_ENUM_TYPE GetEnumTypeFromQualType(ASTContext &ASTCtx,
+                                                    QualType desugared) {
+
+  const auto &semantics = ASTCtx.getTypeInfo(desugared);
+
+  switch (semantics.Width) {
+
+  default:
+  case 32:
+    return desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT
+                                              : D3D12_HLSL_ENUM_TYPE_INT;
+
+  case 16:
+    return desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT16_T
+                                              : D3D12_HLSL_ENUM_TYPE_INT16_T;
+
+  case 64:
+    return desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT64_T
+                                              : D3D12_HLSL_ENUM_TYPE_INT64_T;
+  }
+
+  assert(false && "QualType of invalid type passed");
+  return D3D12_HLSL_ENUM_TYPE_INT;
+}
+
 struct RecursiveStmtReflector : public StmtVisitor<RecursiveStmtReflector> {
 
   ASTContext &ASTCtx;
@@ -1461,12 +1530,136 @@ struct RecursiveStmtReflector : public StmtVisitor<RecursiveStmtReflector> {
 
     if (LastError)
       return;
+    
+    uint32_t loc = uint32_t(Refl.IfSwitchStatements.size());
 
-    LastError = GenerateStatement(
-        ASTCtx, Diags, SM, Refl, AutoBindingSpace, Depth + 1, Features,
-        ParentNodeId, DefaultRowMaj, FwdDecls, LangOpts,
-        D3D12_HLSL_NODE_TYPE_IF, If->getConditionVariable(), If->getElse(),
-        If->getThen(), If, If->getElse());
+    const SourceRange &sourceRange = If->getSourceRange();
+
+    uint32_t nodeId;
+    if (ReflectionError err =
+            PushNextNodeId(nodeId, Refl, SM, LangOpts, "", nullptr,
+                           D3D12_HLSL_NODE_TYPE_IF_ROOT, ParentNodeId, loc,
+                           &sourceRange, &FwdDecls)) {
+      LastError = err;
+      return;
+    }
+
+    Refl.IfSwitchStatements.push_back(ReflectionIfSwitchStmt());
+
+    std::vector<Stmt*> branches;
+    branches.reserve(2);
+    branches.push_back(If);
+
+    Stmt *child = If->getElse();
+
+    while (child) {
+
+      branches.push_back(child);
+
+      if (IfStmt *ifChild = dyn_cast<IfStmt>(child))
+        child = ifChild->getElse();
+
+      else
+        break;
+    }
+
+    bool hasElse = branches.size() > 1 && !isa<IfStmt>(branches.back());
+    uint64_t counter = 0;
+
+    for (Stmt *child : branches) {
+
+      uint32_t loc = uint32_t(Refl.BranchStatements.size());
+      Refl.BranchStatements.push_back(ReflectionBranchStmt());
+
+      const SourceRange &sourceRange = child->getSourceRange();
+
+      D3D12_HLSL_NODE_TYPE nodeType =
+          !counter ? D3D12_HLSL_NODE_TYPE_IF_FIRST
+                   : (hasElse && counter + 1 == branches.size()
+                          ? D3D12_HLSL_NODE_TYPE_ELSE
+                          : D3D12_HLSL_NODE_TYPE_ELSE_IF);
+      ++counter;
+
+      uint32_t childId;
+      if (ReflectionError err =
+              PushNextNodeId(childId, Refl, SM, LangOpts, "", nullptr, nodeType,
+                             nodeId, loc, &sourceRange, &FwdDecls)) {
+        LastError = err;
+        return;
+      }
+
+      IfStmt *branch = dyn_cast_or_null<IfStmt>(child);
+
+      VarDecl *cond = branch ? branch->getConditionVariable() : nullptr;
+
+      if (cond) {
+
+        uint32_t typeId;
+        if (ReflectionError err = GenerateTypeInfo(
+                typeId, ASTCtx, Refl, cond->getType(), DefaultRowMaj)) {
+          LastError = err;
+          return;
+        }
+
+        const SourceRange &sourceRange = cond->getSourceRange();
+
+        uint32_t nextNodeId;
+        if (ReflectionError err =
+                PushNextNodeId(nextNodeId, Refl, SM, LangOpts, cond->getName(),
+                               cond, D3D12_HLSL_NODE_TYPE_VARIABLE, childId,
+                               typeId, &sourceRange, &FwdDecls)) {
+          LastError = err;
+          return;
+        }
+      }
+
+      if (ReflectionError err = ReflectionBranchStmt::Initialize(
+              Refl.BranchStatements[loc], childId, cond, true,
+              D3D12_HLSL_ENUM_TYPE_UINT, uint64_t(-1))) {
+        LastError = err;
+        return;
+      }
+
+      uint32_t parentSelf = ParentNodeId;
+      ParentNodeId = childId;
+
+      Stmt *realChild = branch ? branch->getThen() : child;
+      auto firstIt = realChild->child_begin();
+      auto it = firstIt;
+
+      if (it != realChild->child_end()) {
+
+        ++it;
+
+        if (it == realChild->child_end() && isa<CompoundStmt>(*firstIt)) {
+
+          it = firstIt->child_begin();
+
+          for (; it != firstIt->child_end(); ++it)
+            if (ReflectionError err = TraverseStmt(*it)) {
+              LastError = err;
+              return;
+            }
+        }
+
+        else {
+          it = firstIt;
+          for (; it != realChild->child_end(); ++it)
+            if (ReflectionError err = TraverseStmt(*it)) {
+              LastError = err;
+              return;
+            }
+        }
+      }
+
+      ParentNodeId = parentSelf;
+    }
+
+    if (ReflectionError err = ReflectionIfSwitchStmt::Initialize(
+            Refl.IfSwitchStatements[loc], nodeId, false, hasElse)) {
+      LastError = err;
+      return;
+    }
   }
 
   void VisitForStmt(ForStmt *For) {
@@ -1518,11 +1711,143 @@ struct RecursiveStmtReflector : public StmtVisitor<RecursiveStmtReflector> {
     if (LastError)
       return;
 
-    LastError = GenerateStatement(
-        ASTCtx, Diags, SM, Refl, AutoBindingSpace, Depth + 1, Features,
-        ParentNodeId, DefaultRowMaj, FwdDecls, LangOpts,
-        D3D12_HLSL_NODE_TYPE_SWITCH, Switch->getConditionVariable(),
-        Switch->getBody(), nullptr, Switch);
+    uint32_t loc = uint32_t(Refl.IfSwitchStatements.size());
+
+    const SourceRange &sourceRange = Switch->getSourceRange();
+
+    uint32_t nodeId;
+    if (ReflectionError err =
+            PushNextNodeId(nodeId, Refl, SM, LangOpts, "", nullptr,
+                           D3D12_HLSL_NODE_TYPE_SWITCH, ParentNodeId, loc,
+                           &sourceRange, &FwdDecls)) {
+      LastError = err;
+      return;
+    }
+
+    Refl.IfSwitchStatements.push_back(ReflectionIfSwitchStmt());
+
+    VarDecl *cond = Switch->getConditionVariable();
+
+    if (cond) {
+
+      uint32_t typeId;
+      if (ReflectionError err = GenerateTypeInfo(
+              typeId, ASTCtx, Refl, cond->getType(), DefaultRowMaj)) {
+        LastError = err;
+        return;
+      }
+
+      const SourceRange &sourceRange = cond->getSourceRange();
+
+      uint32_t nextNodeId;
+      if (ReflectionError err =
+              PushNextNodeId(nextNodeId, Refl, SM, LangOpts, cond->getName(),
+                             cond, D3D12_HLSL_NODE_TYPE_VARIABLE, nodeId,
+                             typeId, &sourceRange, &FwdDecls)) {
+        LastError = err;
+        return;
+      }
+    }
+
+    Stmt *body = Switch->getBody();
+    assert(body && "SwitchStmt has no body");
+
+    bool hasDefault = false;
+
+    for (Stmt *child : body->children()) {
+
+      SwitchCase *switchCase = nullptr;
+      uint64_t caseValue = uint64_t(-1);
+      D3D12_HLSL_ENUM_TYPE valueType = D3D12_HLSL_ENUM_TYPE_INT;
+      D3D12_HLSL_NODE_TYPE nodeType = D3D12_HLSL_NODE_TYPE_INVALID;
+
+      bool isComplexCase = true;
+
+      if (CaseStmt *caseStmt = dyn_cast<CaseStmt>(child)) {
+
+        switchCase = caseStmt;
+
+        llvm::APSInt result;
+
+        if (caseStmt->getLHS()->isIntegerConstantExpr(result, ASTCtx)) {
+          caseValue = result.getZExtValue();
+
+          QualType desugared = caseStmt->getLHS()->getType();
+          valueType = GetEnumTypeFromQualType(ASTCtx, desugared);
+          isComplexCase = false;
+        }
+
+        else
+          caseValue = uint64_t(-1);
+
+        nodeType = D3D12_HLSL_NODE_TYPE_CASE;
+
+      } else if (DefaultStmt *defaultStmt =
+                     dyn_cast<DefaultStmt>(child)) {
+        switchCase = defaultStmt;
+        hasDefault = true;
+        nodeType = D3D12_HLSL_NODE_TYPE_DEFAULT;
+      }
+
+      if (!switchCase)
+        continue;
+
+      uint32_t loc = uint32_t(Refl.BranchStatements.size());
+
+      const SourceRange &sourceRange = switchCase->getSourceRange();
+
+      uint32_t childId;
+      if (ReflectionError err =
+              PushNextNodeId(childId, Refl, SM, LangOpts, "", nullptr, nodeType,
+                             nodeId, loc, &sourceRange, &FwdDecls)) {
+        LastError = err;
+        return;
+      }
+
+      Refl.BranchStatements.push_back(ReflectionBranchStmt());
+      if (ReflectionError err = ReflectionBranchStmt::Initialize(
+              Refl.BranchStatements.back(), childId, false, isComplexCase,
+              valueType, caseValue)) {
+        LastError = err;
+        return;
+      }
+
+      uint32_t parentSelf = ParentNodeId;
+      ParentNodeId = childId;
+
+      auto realChild = switchCase->getSubStmt();
+
+      auto firstIt = realChild->child_begin();
+      auto it = firstIt;
+
+      if (it != realChild->child_end()) {
+
+        ++it;
+
+        if (it == realChild->child_end() && isa<CompoundStmt>(*firstIt)) {
+          for (Stmt *childChild : firstIt->children())
+            if (ReflectionError err = TraverseStmt(childChild)) {
+              LastError = err;
+              return;
+            }
+        }
+
+        else
+          for (Stmt *childChild : realChild->children())
+            if (ReflectionError err = TraverseStmt(childChild)) {
+              LastError = err;
+              return;
+            }
+      }
+
+      ParentNodeId = parentSelf;
+    }
+
+    if (ReflectionError err = ReflectionIfSwitchStmt::Initialize(
+            Refl.IfSwitchStatements[loc], nodeId, cond, hasDefault)) {
+      LastError = err;
+      return;
+    }
   }
 
   void VisitCompoundStmt(CompoundStmt *C) {
@@ -1829,28 +2154,8 @@ public:
 
     QualType enumType = ED->getIntegerType();
     QualType desugared = enumType.getDesugaredType(ASTCtx);
-    const auto &semantics = ASTCtx.getTypeInfo(desugared);
 
-    D3D12_HLSL_ENUM_TYPE type;
-
-    switch (semantics.Width) {
-
-    default:
-    case 32:
-      type = desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT
-                                                : D3D12_HLSL_ENUM_TYPE_INT;
-      break;
-
-    case 16:
-      type = desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT16_T
-                                                : D3D12_HLSL_ENUM_TYPE_INT16_T;
-      break;
-
-    case 64:
-      type = desugared->isUnsignedIntegerType() ? D3D12_HLSL_ENUM_TYPE_UINT64_T
-                                                : D3D12_HLSL_ENUM_TYPE_INT64_T;
-      break;
-    }
+    D3D12_HLSL_ENUM_TYPE type = GetEnumTypeFromQualType(ASTCtx, desugared);
 
     Refl.Enums.push_back({nodeId, type});
   }
@@ -1874,6 +2179,27 @@ public:
     LastError =
         PushNextNodeId(nodeId, Refl, SM, ASTCtx.getLangOpts(), TD->getName(),
                        TD, D3D12_HLSL_NODE_TYPE_TYPEDEF, ParentNodeId, typeId);
+  }
+
+  void VisitTypeAliasDecl(TypeAliasDecl *TAD) {
+
+    if (LastError)
+      return;
+
+    if (!(Features & D3D12_HLSL_REFLECTION_FEATURE_USER_TYPES))
+      return;
+
+    uint32_t typeId;
+    if (ReflectionError err = GenerateTypeInfo(
+            typeId, ASTCtx, Refl, TAD->getUnderlyingType(), DefaultRowMaj)) {
+      LastError = err;
+      return;
+    }
+
+    uint32_t nodeId;
+    LastError =
+        PushNextNodeId(nodeId, Refl, SM, ASTCtx.getLangOpts(), TAD->getName(),
+                       TAD, D3D12_HLSL_NODE_TYPE_USING, ParentNodeId, typeId);
   }
 
   void VisitFieldDecl(FieldDecl *FD) {
@@ -2048,10 +2374,11 @@ RecursiveReflectHLSL(const DeclContext &Ctx, ASTContext &ASTCtx,
   return Reflector.TraverseDeclContext();
 }
 
-[[nodiscard]] ReflectionError HLSLReflectionDataFromAST(
-    ReflectionData &Result, CompilerInstance &Compiler,
-    TranslationUnitDecl &Ctx, uint32_t AutoBindingSpace,
-    D3D12_HLSL_REFLECTION_FEATURE Features, bool DefaultRowMaj) {
+[[nodiscard]] ReflectionError
+HLSLReflectionDataFromAST(ReflectionData &Result, CompilerInstance &Compiler,
+                          TranslationUnitDecl &Ctx, uint32_t AutoBindingSpace,
+                          D3D12_HLSL_REFLECTION_FEATURE Features,
+                          bool DefaultRowMaj) {
 
   DiagnosticsEngine &Diags = Ctx.getParentASTContext().getDiagnostics();
   const SourceManager &SM = Compiler.getSourceManager();
@@ -2066,8 +2393,8 @@ RecursiveReflectHLSL(const DeclContext &Ctx, ASTContext &ASTCtx,
 
     if (ReflectionError err = ReflectionNodeSymbol::Initialize(
             Result.NodeSymbols[0], 0, uint16_t(-1), 0, 0, 0, 0)) {
-      llvm::errs()
-          << "HLSLReflectionDataFromAST: Failed to add root symbol: " << err;
+      llvm::errs() << "HLSLReflectionDataFromAST: Failed to add root symbol: "
+                   << err;
       Result = {};
       return err;
     }
