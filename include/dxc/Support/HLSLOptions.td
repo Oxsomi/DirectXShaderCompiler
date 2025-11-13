@@ -580,8 +580,8 @@ def getprivate : JoinedOrSeparate<["-", "/"], "getprivate">, Flags<[DriverOption
 def nologo : Flag<["-", "/"], "nologo">, Group<hlslcore_Group>, Flags<[DriverOption, HelpHidden]>,
   HelpText<"Suppress copyright message">;
 
-def keep_all_resources : Flag<["-", "/"], "keep-all-resources">, Group<hlslcomp_Group>, Flags<[CoreOption]>,
-  HelpText<"Keep even optimized out resources for dxil reflection purposes.">;
+def fhlsl_unused_resource_bindings_EQ : Joined<["-"], "fhlsl-unused-resource-bindings=">, Group<hlslcomp_Group>, Flags<[CoreOption]>,
+  HelpText<"Control handling of unused resource bindings:\n\t\t\t'strip' (default, unused resources are stripped and their binding slots are freed up).\n\t\t\t'keep-all' (keep all unused resources around but mark them with D3D_SIF_UNUSED for reflection).">;
 
 //////////////////////////////////////////////////////////////////////////////
 // Reflector Options

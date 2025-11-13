@@ -400,7 +400,8 @@ CGMSHLSLRuntime::CGMSHLSLRuntime(CodeGenModule &CGM)
   opts.PackingStrategy = CGM.getCodeGenOpts().HLSLSignaturePackingStrategy;
   opts.bLegacyResourceReservation =
       CGM.getCodeGenOpts().HLSLLegacyResourceReservation;
-  opts.bKeepAllResources = CGM.getCodeGenOpts().HLSLKeepAllResources;
+  opts.bUnusedResourceBinding =
+      unsigned(CGM.getCodeGenOpts().HLSLUnusedResourceBinding);
   opts.bForceZeroStoreLifetimes =
       CGM.getCodeGenOpts().HLSLForceZeroStoreLifetimes;
 
