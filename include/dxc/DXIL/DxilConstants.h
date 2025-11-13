@@ -15,7 +15,12 @@
 
 namespace hlsl {
 
-enum class UnusedResourceBinding : uint32_t { Strip, Reserved, KeepAll, Count };
+enum class UnusedResourceBinding : uint32_t {
+  Strip,
+  ReserveAll,
+  KeepAll,
+  Count
+};
 
 static_assert(UnusedResourceBinding::Count <= UnusedResourceBinding(7),
               "Only 3 bits are reserved for UnusedResourceBinding by HLOptions "

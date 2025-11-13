@@ -1045,6 +1045,7 @@ static bool RemoveResourcesWithUnusedSymbolsHelper(
       p = vec.erase(c);
       if (GlobalVariable *GV = dyn_cast<GlobalVariable>(symbol))
         eraseList.insert(GV);
+      modif = true;
       continue;
     }
     if ((*c)->GetID() != resID) {
@@ -1057,16 +1058,26 @@ static bool RemoveResourcesWithUnusedSymbolsHelper(
   }
   return modif;
 }
-} // namespace
 
-bool DxilModule::RemoveResourcesWithUnusedSymbols() {
+template <typename TResource>
+static bool MarkResourcesUnused(std::vector<std::unique_ptr<TResource>> &vec) {
+
   bool modif = false;
-  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_SRVs);
-  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_UAVs);
-  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_CBuffers);
-  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_Samplers);
+
+  for (auto p = vec.begin(); p != vec.end();) {
+    auto c = p++;
+    Constant *symbol = (*c)->GetGlobalSymbol();
+    symbol->removeDeadConstantUsers();
+    if (symbol->user_empty()) {
+      (*c)->SetIsUnused(true);
+      modif = true;
+      continue;
+    }
+  }
+
   return modif;
 }
+} // namespace
 
 bool DxilModule::RemoveEmptyBuffers() {
 
@@ -1101,26 +1112,14 @@ bool DxilModule::RemoveEmptyBuffers() {
   return mod;
 }
 
-namespace {
-template <typename TResource>
-static bool MarkResourcesUnused(std::vector<std::unique_ptr<TResource>> &vec) {
-
+bool DxilModule::RemoveResourcesWithUnusedSymbols() {
   bool modif = false;
-
-  for (auto p = vec.begin(); p != vec.end();) {
-    auto c = p++;
-    Constant *symbol = (*c)->GetGlobalSymbol();
-    symbol->removeDeadConstantUsers();
-    if (symbol->user_empty()) {
-      (*c)->SetIsUnused(true);
-      modif = true;
-      continue;
-    }
-  }
-
+  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_SRVs);
+  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_UAVs);
+  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_CBuffers);
+  modif |= RemoveResourcesWithUnusedSymbolsHelper(m_Samplers);
   return modif;
 }
-} // namespace
 
 bool DxilModule::MarkUnusedResources() {
   bool modif = true;

@@ -238,7 +238,8 @@ bool RemoveResource(std::vector<std::unique_ptr<TResource>> &vec,
       continue;
 
     if ((keepAllocated && (*p)->IsAllocated()) ||
-        unusedResourceBinding == UnusedResourceBinding::KeepAll) {
+        unusedResourceBinding == UnusedResourceBinding::KeepAll ||
+        unusedResourceBinding == UnusedResourceBinding::ReserveAll) {
       // Keep the resource, but it has no more symbol.
       (*p)->SetGlobalSymbol(UndefValue::get(pVariable->getType()));
     } else {

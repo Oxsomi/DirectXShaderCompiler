@@ -555,7 +555,6 @@ public:
 
     unsigned newResources = DM.GetCBuffers().size() + DM.GetUAVs().size() +
                             DM.GetSRVs().size() + DM.GetSamplers().size();
-    bChanged = bChanged || (numResources != newResources);
 
     if (0 == newResources)
       return bChanged;
@@ -576,6 +575,8 @@ public:
     }
 
     bChanged |= ResourceRegisterAllocator.AllocateRegisters(DM);
+    if (DM.GetUnusedResourceBinding() == UnusedResourceBinding::ReserveAll)
+      bChanged |= DM.RemoveResourcesWithUnusedSymbols();
 
     // Fill in top-level CBuffer variable usage bit
     UpdateCBufferUsage();
