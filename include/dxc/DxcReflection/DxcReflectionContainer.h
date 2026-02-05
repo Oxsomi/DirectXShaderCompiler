@@ -585,6 +585,12 @@ public:
   }
 };
 
+#ifndef _MSVC_VER
+  #define MIGHT_BE_UNUSED __attribute__((unused)) 
+#else
+  #define MIGHT_BE_UNUSED
+#endif
+
 class ReflectionShaderResource { // Almost maps to D3D12_SHADER_INPUT_BIND_DESC,
                                  // minus
   // the Name (and uID replaced with NodeID) and added
@@ -602,7 +608,7 @@ class ReflectionShaderResource { // Almost maps to D3D12_SHADER_INPUT_BIND_DESC,
     uint64_t TypeDimensionReturnTypeFlagsBindCount;
   };
 
-  uint32_t Pad;
+  MIGHT_BE_UNUSED uint32_t Pad;
   uint32_t NodeId;
 
   union {
@@ -669,6 +675,8 @@ public:
            NodeId == other.NodeId && ArrayIdBufferId == other.ArrayIdBufferId;
   }
 };
+
+#undef MIGHT_BE_UNUSED
 
 class ReflectionArray {
 
