@@ -1630,6 +1630,13 @@ MDTuple *DxilMDHelper::EmitDxilEntryProperties(uint64_t rawShaderFlag,
       }
       MDVals.emplace_back(MDNode::get(m_Ctx, WaveSizeVal));
     }
+
+    const hlsl::ShaderModel *SM = GetShaderModel();
+    if (SM->IsSMAtLeast(6, 10)) {
+      MDVals.emplace_back(
+          Uint32ToConstMD(DxilMDHelper::kDxilGroupSharedLimitTag));
+      MDVals.emplace_back(Uint32ToConstMD(props.groupSharedLimitBytes));
+    }
   } break;
     // Geometry shader.
   case DXIL::ShaderKind::Geometry: {
@@ -1777,6 +1784,13 @@ void DxilMDHelper::LoadDxilEntryProperties(const MDOperand &MDO,
       props.numThreads[0] = ConstMDToUint32(pNode->getOperand(0));
       props.numThreads[1] = ConstMDToUint32(pNode->getOperand(1));
       props.numThreads[2] = ConstMDToUint32(pNode->getOperand(2));
+    } break;
+
+    case DxilMDHelper::kDxilGroupSharedLimitTag: {
+      DXASSERT(props.IsCS(), "else invalid shader kind");
+      props.groupSharedLimitBytes = ConstMDToUint32(MDO);
+      if (!m_pSM->IsSMAtLeast(6, 10))
+        m_bExtraMetadata = true;
     } break;
 
     case DxilMDHelper::kDxilGSStateTag: {

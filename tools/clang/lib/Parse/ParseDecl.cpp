@@ -637,8 +637,12 @@ bool Parser::MaybeParseHLSLAttributes(std::vector<hlsl::UnusualAnnotation *> &ta
       // both registr() and packofset() would cause a crash without this fix.
 
       if (Tok.is(tok::l_paren)) {
+<<<<<<< HEAD
         Diag(Tok.getLocation(), diag::err_hlsl_expected_hlsl_attribute)
             << semanticName;
+=======
+        Diag(Tok.getLocation(), diag::err_hlsl_expected_hlsl_attribute);
+>>>>>>> 7936ebc894881a33eb24e44c207f336c98b1dd93
         ConsumeParen();
         SkipUntil(tok::r_paren, StopAtSemi); // skip through )
         return true;
@@ -844,6 +848,7 @@ void Parser::ParseGNUAttributeArgs(IdentifierInfo *AttrName,
     case AttributeList::AT_HLSLMaxVertexCount:
     case AttributeList::AT_HLSLUnroll:
     case AttributeList::AT_HLSLWaveSize:
+    case AttributeList::AT_HLSLGroupSharedLimit:
     case AttributeList::AT_NoInline:
       // The following are not accepted in [attribute(param)] syntax:
       // case AttributeList::AT_HLSLCentroid:

@@ -11,6 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "dxc/DXIL/DxilConstants.h"
+
 #include "clang/AST/Mangle.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Attr.h"
@@ -1621,6 +1623,9 @@ void MicrosoftCXXNameMangler::mangleType(const BuiltinType *T, Qualifiers,
   case BuiltinType::UInt8_4Packed:
     Out << "$ui8_4pk@";
     break;
+  case BuiltinType::LinAlgMatrix:
+    Out << "$linalg_matrix@";
+    break;
     // HLSL Change Ends
   }
 }
@@ -2033,6 +2038,9 @@ void MicrosoftCXXNameMangler::mangleType(const LValueReferenceType *T,
                                          Qualifiers Quals, SourceRange Range) {
   QualType PointeeType = T->getPointeeType();
   Out << (Quals.hasVolatile() ? 'B' : 'A');
+  if (PointeeType.getQualifiers().getAddressSpace() ==
+      hlsl::DXIL::kTGSMAddrSpace)
+    Out << 'G';
   manglePointerExtQualifiers(Quals, PointeeType);
   mangleType(PointeeType, Range);
 }

@@ -2349,6 +2349,28 @@ static void ValidateDxilOperationCallInProfile(CallInst *CI,
         ValCtx.EmitInstrError(CI, ValidationRule::InstrNoReadingUninitialized);
     DxilInst_HitObject_TraceRay HOTraceRay(CI);
   } break;
+
+  // Clustered Geometry & Triangle Object Positions intrinsics
+  case DXIL::OpCode::RayQuery_CandidateClusterID:
+  case DXIL::OpCode::RayQuery_CommittedClusterID:
+  case DXIL::OpCode::RayQuery_CandidateTriangleObjectPosition:
+  case DXIL::OpCode::RayQuery_CommittedTriangleObjectPosition: {
+    // Validate rayQueryHandle is not undef
+    Value *RayQueryHandle = CI->getArgOperand(1);
+    if (isa<UndefValue>(RayQueryHandle))
+      ValCtx.EmitInstrError(CI, ValidationRule::InstrNoReadingUninitialized);
+    break;
+  }
+
+  case DXIL::OpCode::HitObject_ClusterID:
+  case DXIL::OpCode::HitObject_TriangleObjectPosition: {
+    // Validate HitObject is not undef
+    Value *HitObject = CI->getArgOperand(1);
+    if (isa<UndefValue>(HitObject))
+      ValCtx.EmitInstrError(CI, ValidationRule::InstrUndefHitObject);
+    break;
+  }
+
   case DXIL::OpCode::AtomicBinOp:
   case DXIL::OpCode::AtomicCompareExchange: {
     Type *pOverloadType = OP::GetOverloadType(Opcode, CI->getCalledFunction());
@@ -2520,7 +2542,11 @@ static void ValidateExternalFunction(Function *F, ValidationContext &ValCtx) {
     }
 
     unsigned Opcode = ConstOpcode->getLimitedValue();
-    if (Opcode >= (unsigned)DXIL::OpCode::NumOpCodes) {
+    OP::OpCodeTableID TableID;
+    unsigned OpIndex;
+    if (!OP::DecodeOpCode(Opcode, TableID, OpIndex) ||
+        (TableID != OP::OpCodeTableID::CoreOps &&
+         !pSM->IsPreReleaseShaderModel())) {
       // invalid Opcode; function body will validate this error.
       continue;
     }
@@ -3205,6 +3231,8 @@ static void ValidateFunctionBody(Function *F, ValidationContext &ValCtx) {
       ValCtx.DxilMod.GetGlobalFlags() & DXIL::kEnableMinPrecision;
   bool SupportsLifetimeIntrinsics =
       ValCtx.DxilMod.GetShaderModel()->IsSM66Plus();
+  bool ExperimentalShaderModel =
+      ValCtx.DxilMod.GetShaderModel()->IsPreReleaseShaderModel();
   SmallVector<CallInst *, 16> GradientOps;
   SmallVector<CallInst *, 16> Barriers;
   CallInst *SetMeshOutputCounts = nullptr;
@@ -3262,11 +3290,19 @@ static void ValidateFunctionBody(Function *F, ValidationContext &ValCtx) {
           }
 
           unsigned Opcode = OpcodeConst->getLimitedValue();
-          if (Opcode >= static_cast<unsigned>(DXIL::OpCode::NumOpCodes)) {
+          OP::OpCodeTableID TableID;
+          unsigned OpIndex;
+          if (!OP::DecodeOpCode(Opcode, TableID, OpIndex)) {
             ValCtx.EmitInstrFormatError(
                 &I, ValidationRule::InstrIllegalDXILOpCode,
                 {std::to_string((unsigned)DXIL::OpCode::NumOpCodes),
                  std::to_string(Opcode)});
+            continue;
+          }
+          if (TableID != OP::OpCodeTableID::CoreOps &&
+              !ExperimentalShaderModel) {
+            ValCtx.EmitInstrError(
+                &I, ValidationRule::InstrExpDXILOpCodeRequiresExpSM);
             continue;
           }
           DXIL::OpCode DxilOpcode = (DXIL::OpCode)Opcode;
@@ -3921,6 +3957,18 @@ static void ValidateGlobalVariables(ValidationContext &ValCtx) {
     Rule = ValidationRule::SmMaxMSSMSize;
     MaxSize = DXIL::kMaxMSSMSize;
   }
+
+  // Check if the entry function has attribute to override TGSM size.
+  if (M.HasDxilEntryProps(M.GetEntryFunction())) {
+    DxilEntryProps &EntryProps = M.GetDxilEntryProps(M.GetEntryFunction());
+    if (EntryProps.props.IsCS()) {
+      unsigned SpecifiedTGSMSize = EntryProps.props.groupSharedLimitBytes;
+      if (SpecifiedTGSMSize > 0) {
+        MaxSize = SpecifiedTGSMSize;
+      }
+    }
+  }
+
   if (TGSMSize > MaxSize) {
     Module::global_iterator GI = M.GetModule()->global_end();
     GlobalVariable *GV = &*GI;
@@ -5449,12 +5497,11 @@ struct CompatibilityChecker {
       MaskForDeriv |=
           static_cast<uint32_t>(ConflictFlags::DerivInComputeShaderModel);
     } else if (ShaderKind == DXIL::ShaderKind::Node) {
-      // Only broadcasting launch supports derivatives.
-      if (Props.Node.LaunchType != DXIL::NodeLaunchType::Broadcasting)
-        MaskForDeriv |= static_cast<uint32_t>(ConflictFlags::DerivLaunch);
-      // Thread launch node has no group.
-      if (Props.Node.LaunchType == DXIL::NodeLaunchType::Thread)
+      // Thread launch node has no group and doesn't support derivatives.
+      if (Props.Node.LaunchType == DXIL::NodeLaunchType::Thread) {
         MaskForGroup |= static_cast<uint32_t>(ConflictFlags::RequiresGroup);
+        MaskForDeriv |= static_cast<uint32_t>(ConflictFlags::DerivLaunch);
+      }
     }
 
     if (ShaderKind == DXIL::ShaderKind::Mesh ||

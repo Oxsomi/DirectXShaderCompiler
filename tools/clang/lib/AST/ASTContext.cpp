@@ -24,6 +24,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/ExternalASTSource.h"
+#include "clang/AST/HlslTypes.h" // HLSL Change
 #include "clang/AST/Mangle.h"
 #include "clang/AST/MangleNumberingContext.h"
 #include "clang/AST/RecordLayout.h"
@@ -38,8 +39,8 @@
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Capacity.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/MathExtras.h" // HLSL Change
+#include "llvm/Support/raw_ostream.h"
 #include <map>
 
 using namespace clang;
@@ -1105,6 +1106,7 @@ void ASTContext::InitBuiltinTypes(const TargetInfo &Target) {
     InitBuiltinType(LitFloatTy, BuiltinType::LitFloat);
     InitBuiltinType(Int8_4PackedTy, BuiltinType::Int8_4Packed);
     InitBuiltinType(UInt8_4PackedTy, BuiltinType::UInt8_4Packed);
+    InitBuiltinType(LinAlgMatrixTy, BuiltinType::LinAlgMatrix);
 
     HLSLStringTy = this->getPointerType(CharTy);
 
@@ -1696,6 +1698,11 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
       Width = 64;
       Align = 64;
       break;
+    case BuiltinType::LinAlgMatrix:
+      // Model it as a pointer an to opaque type
+      Width = Target->getPointerWidth(0);
+      Align = Target->getPointerAlign(0);
+      break;
     // HLSL Change Ends
     case BuiltinType::LongDouble:
       Width = Target->getLongDoubleWidth();
@@ -1804,6 +1811,17 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
 
     const RecordType *RT = cast<RecordType>(TT);
     const RecordDecl *RD = RT->getDecl();
+    // HLSL Change Begins
+#ifdef ENABLE_SPIRV_CODEGEN
+    if (hlsl::IsVKBufferPointerType(QualType(T, 0))) {
+      TypeInfo Info = getTypeInfo(UnsignedLongLongTy);
+      Width = Info.Width;
+      Align = Info.Align;
+      AlignIsRequired = Info.AlignIsRequired;
+      break;
+    }
+#endif
+    // HLSL Change Ends
     const ASTRecordLayout &Layout = getASTRecordLayout(RD);
     Width = toBits(Layout.getSize());
     Align = toBits(Layout.getAlignment());

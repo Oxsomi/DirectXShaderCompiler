@@ -616,7 +616,7 @@ Each HLSL signature parameter is defined via C-like type, interpolation mode, an
 
 SV semantics add specific meanings and constraints to associated parameters. A parameter may be supplied by the hardware, and is then known as a System Generated Value (SGV). Alternatively, a parameter may be interpreted by the hardware and is then known as System Interpreted Value (SIV).  SGVs and SIVs are pipeline-stage dependent; moreover, some participate in signature packing and some do not. Non-SV semantics always participate in signature packing.
 
-Most System Generated Values (SGV) are loaded using special Dxil intrinsic functions, rather than loading the input from a signature.  These usually will not be present in the signature at all.  Their presence may be detected by the declaration and use of the special instrinsic function itself.  The exceptions to this are notible.  In one case they are present and loaded from the signature instead of a special intrinsic because they must be part of the packed signature potentially passed from the prior stage, allowing the prior stage to override these values, such as for SV_PrimitiveID and SV_IsFrontFace that may be written in the the Geometry Shader.  In another case, they identify signature elements that still contribute to DXBC signature for informational purposes, but will only use the special intrinsic function to read the value, such as for SV_PrimitiveID for GS input and SampleIndex for PS input.
+Most System Generated Values (SGV) are loaded using special Dxil intrinsic functions, rather than loading the input from a signature.  These usually will not be present in the signature at all.  Their presence may be detected by the declaration and use of the special instrinsic function itself.  The exceptions to this are notable.  In one case they are present and loaded from the signature instead of a special intrinsic because they must be part of the packed signature potentially passed from the prior stage, allowing the prior stage to override these values, such as for SV_PrimitiveID and SV_IsFrontFace that may be written in the the Geometry Shader.  In another case, they identify signature elements that still contribute to DXBC signature for informational purposes, but will only use the special intrinsic function to read the value, such as for SV_PrimitiveID for GS input and SampleIndex for PS input.
 
 The classification of behavior for various system values in various signature locations is described in a table organized by SemanticKind and SigPointKind.  The SigPointKind is a new classification that uniquely identifies each set of parameters that may be input or output for each entry point.  For each combination of SemanticKind and SigPointKind, there is a SemanticInterpretationKind that defines the class of treatment for that location.
 
@@ -2111,6 +2111,8 @@ Opcodes are defined on a dense range and will be provided as enum in a header fi
 .. <py::lines('OPCODES-RST')>hctdb_instrhelp.get_opcodes_rst()</py>
 .. OPCODES-RST:BEGIN
 
+Opcode Table CoreOps, id=0: Core DXIL operations
+
 === ===================================================== =======================================================================================================================================================================================================================
 ID  Name                                                  Description
 === ===================================================== =======================================================================================================================================================================================================================
@@ -3055,6 +3057,52 @@ Given width, offset:
         ushr dest, src2, offset
     }
 
+
+
+
+Opcode Table ExperimentalOps, id=32768: Experimental DXIL operations
+
+========== ======================================== ===================================================================================================================
+ID         Name                                     Description
+========== ======================================== ===================================================================================================================
+2147483648 ExperimentalNop                          nop does nothing
+2147483649 GetGroupWaveIndex                        returns the index of the wave in the thread group
+2147483650 GetGroupWaveCount                        returns the number of waves in the thread group
+2147483651 ClusterID                                returns the user-defined ClusterID of the intersected CLAS
+2147483652 RayQuery_CandidateClusterID              returns candidate hit cluster ID
+2147483653 RayQuery_CommittedClusterID              returns committed hit cluster ID
+2147483654 HitObject_ClusterID                      returns the cluster ID of this committed hit
+2147483655 TriangleObjectPosition                   returns triangle vertices in object space as <9 x float>
+2147483656 RayQuery_CandidateTriangleObjectPosition returns candidate triangle vertices in object space as <9 x float>
+2147483657 RayQuery_CommittedTriangleObjectPosition returns committed triangle vertices in object space as <9 x float>
+2147483658 HitObject_TriangleObjectPosition         returns triangle vertices in object space as <9 x float>
+2147483659 CreateMatrix                             creates a handle to a Matrix
+2147483660 FillMatrix                               fills a matrix with a scalar value
+2147483661 CopyConvertMatrix                        Converts and copies the element and use type of the source matrix to the destination matrix with optional transpose
+2147483662 MatrixLoadFromDescriptor                 fills a matrix with data from a [RW]ByteAddressBuffer
+2147483663 MatrixLoadFromMemory                     fills a matrix with data from a groupshared array
+2147483664 MatrixLength                             returns the number of elements stored in thread-local storage on the active thread for the provided matrix
+2147483665 MatrixGetCoordinate                      returns a two element vector containing the column and row of the matrix that the thread-local index corresponds to
+2147483666 MatrixGetElement                         returns the element of the matrix corresponding to the provided thread-local index
+2147483667 MatrixSetElement                         sets the element of the matrix corresponding to the provided thread-local index
+2147483668 MatrixStoreToDescriptor                  stores a matrix to a RWByteAddressBuffer
+2147483669 MatrixStoreToMemory                      stores a matrix to groupshared memory
+2147483670 MatrixQueryAccumulatorLayout             returns comptime 0 when accumulator matrix are A layout, 1 when B layout
+2147483671 MatrixMulOp                              applies a multiplication op to matrix C using A and B as parameters
+2147483672 MatrixAccumulate                         accumulate A or B matrix into Accumulator matrix following LHS += RHS
+2147483673 MatrixVecMul                             Multiplies a MxK dimension matrix and a K sized input vector
+2147483674 MatrixVecMulAdd                          Multiplies a MxK dimension matrix and a K sized input vector then adds a M sized bias vector
+2147483675 MatrixAccumulateToDescriptor             accumulates a matrix to a RWByteAddressBuffer
+2147483676 MatrixAccumulateToMemory                 accumulates a matrix to groupshared memory
+2147483677 MatrixOuterProduct                       Outer products an M sized vector and a K sized vector producing an MxK matrix
+2147483678 LinAlgMatrixReserved0                    reserved
+2147483679 LinAlgMatrixReserved1                    reserved
+2147483680 LinAlgMatrixReserved2                    reserved
+2147483681 DebugBreak                               triggers a breakpoint if a debugger is attached
+2147483682 IsDebuggerPresent                        returns true if a debugger is attached
+========== ======================================== ===================================================================================================================
+
+
 .. OPCODES-RST:END
 
 
@@ -3134,10 +3182,11 @@ INSTR.CREATEHANDLEIMMRANGEID                                  Local resource mus
 INSTR.DXILSTRUCTUSER                                          Dxil struct types should only be used by ExtractValue.
 INSTR.DXILSTRUCTUSEROUTOFBOUND                                Index out of bound when extract value from dxil struct types.
 INSTR.EVALINTERPOLATIONMODE                                   Interpolation mode on %0 used with eval_* instruction must be linear, linear_centroid, linear_noperspective, linear_noperspective_centroid, linear_sample or linear_noperspective_sample.
+INSTR.EXPDXILOPCODEREQUIRESEXPSM                              Use of experimental DXILOpCode requires an experimental shader model.
 INSTR.EXTRACTVALUE                                            ExtractValue should only be used on dxil struct types and cmpxchg.
 INSTR.FAILTORESLOVETGSMPOINTER                                TGSM pointers must originate from an unambiguous TGSM global variable.
 INSTR.HANDLENOTFROMCREATEHANDLE                               Resource handle should returned by createHandle.
-INSTR.ILLEGALDXILOPCODE                                       DXILOpCode must be [0..%0].  %1 specified.
+INSTR.ILLEGALDXILOPCODE                                       DXILOpCode must be valid or a supported experimental opcode.
 INSTR.ILLEGALDXILOPFUNCTION                                   '%0' is not a DXILOpFuncition for DXILOpcode '%1'.
 INSTR.IMMBIASFORSAMPLEB                                       bias amount for sample_b must be in the range [%0,%1], but %2 was specified as an immediate.
 INSTR.INBOUNDSACCESS                                          Access to out-of-bounds memory is disallowed.
@@ -3289,7 +3338,7 @@ SM.HSINPUTCONTROLPOINTCOUNTRANGE                              HS input control p
 SM.HULLPASSTHRUCONTROLPOINTCOUNTMATCH                         For pass thru hull shader, input control point count must match output control point count
 SM.INCOMPATIBLECALLINENTRY                                    Features used in internal function calls must be compatible with entry
 SM.INCOMPATIBLEDERIVINCOMPUTESHADERMODEL                      Derivatives in compute-model shaders require shader model 6.6 and above
-SM.INCOMPATIBLEDERIVLAUNCH                                    Node shaders only support derivatives in broadcasting launch mode
+SM.INCOMPATIBLEDERIVLAUNCH                                    Node shaders only support derivatives in broadcasting and coalescing launch modes
 SM.INCOMPATIBLEOPERATION                                      Operations used in entry function must be compatible with shader stage and other properties
 SM.INCOMPATIBLEREQUIRESGROUP                                  Functions requiring groupshared memory must be called from shaders with a visible group
 SM.INCOMPATIBLESHADERMODEL                                    Functions may only use features available in the current shader model

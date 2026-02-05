@@ -10,6 +10,8 @@
 #include "ShaderOpTest.h"
 #include "dxc/Support/Global.h"
 
+#include "HlslTestUtils.h"
+
 #include "HlslExecTestUtils.h"
 
 #include <algorithm>
@@ -712,7 +714,7 @@ template <typename T> uint32_t CountBits(T A) {
 // returns the index of the first high/low bit found.
 template <typename T> uint32_t ScanFromMSB(T A, bool LookingForZero) {
   if (A == 0)
-    return ~0;
+    return std::numeric_limits<uint32_t>::max();
 
   constexpr uint32_t NumBits = sizeof(T) * 8;
   for (int32_t I = NumBits - 1; I >= 0; --I) {
@@ -720,7 +722,7 @@ template <typename T> uint32_t ScanFromMSB(T A, bool LookingForZero) {
     if (BitSet != LookingForZero)
       return static_cast<uint32_t>(I);
   }
-  return ~0;
+  return std::numeric_limits<uint32_t>::max();
 }
 
 template <typename T>
@@ -740,14 +742,14 @@ template <typename T> uint32_t FirstBitLow(T A) {
   const uint32_t NumBits = sizeof(T) * 8;
 
   if (A == 0)
-    return ~0;
+    return std::numeric_limits<uint32_t>::max();
 
   for (uint32_t I = 0; I < NumBits; ++I) {
     if (A & (static_cast<T>(1) << I))
       return static_cast<T>(I);
   }
 
-  return ~0;
+  return std::numeric_limits<uint32_t>::max();
 }
 
 DEFAULT_OP_2(OpType::And, (A & B));
@@ -774,6 +776,48 @@ BITWISE_OP(OpType::FirstBitLow, (FirstBitLow(A)));
 //
 
 DEFAULT_OP_1(OpType::Initialize, (A));
+
+template <typename T>
+struct Op<OpType::ArrayOperator_StaticAccess, T, 1> : DefaultValidation<T> {};
+
+template <typename T>
+static std::vector<T> buildExpectedArrayAccess(const InputSets<T> &Inputs) {
+  const size_t VectorSize = Inputs[0].size();
+  std::vector<T> Expected;
+  const size_t IndexCount = 6;
+  Expected.resize(VectorSize);
+
+  size_t IndexList[IndexCount] = {
+      0, VectorSize - 1, 1, VectorSize - 2, VectorSize / 2, VectorSize / 2 + 1};
+  size_t End = std::min(VectorSize, IndexCount);
+  for (size_t I = 0; I < End; ++I)
+    Expected[IndexList[I]] = Inputs[0][IndexList[I]];
+
+  return Expected;
+}
+
+template <typename T>
+struct ExpectedBuilder<OpType::ArrayOperator_StaticAccess, T> {
+  static std::vector<T>
+  buildExpected(Op<OpType::ArrayOperator_StaticAccess, T, 1>,
+                const InputSets<T> &Inputs) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+    return buildExpectedArrayAccess(Inputs);
+  }
+};
+
+template <typename T>
+struct Op<OpType::ArrayOperator_DynamicAccess, T, 2> : DefaultValidation<T> {};
+
+template <typename T>
+struct ExpectedBuilder<OpType::ArrayOperator_DynamicAccess, T> {
+  static std::vector<T>
+  buildExpected(Op<OpType::ArrayOperator_DynamicAccess, T, 2>,
+                const InputSets<T> &Inputs) {
+    DXASSERT_NOMSG(Inputs.size() == 2);
+    return buildExpectedArrayAccess(Inputs);
+  }
+};
 
 //
 // Cast
@@ -839,12 +883,33 @@ CAST_OP(OpType::CastToFloat64, double, (CastToFloat64(A)));
 // specs. An example with this spec for sin and cos is available here:
 // https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#22.10.20
 
-struct TrigonometricValidation {
+template <typename T, OpType OP> struct TrigonometricValidation {
   ValidationConfig ValidationConfig = ValidationConfig::Epsilon(0.0008f);
 };
 
+// Half precision trig functions have a larger tolerance due to their lower
+// precision. Note that the D3D spec
+// does not mention half precision trig functions.
+template <OpType OP> struct TrigonometricValidation<HLSLHalf_t, OP> {
+  ValidationConfig ValidationConfig = ValidationConfig::Epsilon(0.003f);
+};
+
+// For the half precision trig functions with an infinite range in either
+// direction we use 2 ULPs of tolerance instead.
+template <> struct TrigonometricValidation<HLSLHalf_t, OpType::Cosh> {
+  ValidationConfig ValidationConfig = ValidationConfig::Ulp(2.0f);
+};
+
+template <> struct TrigonometricValidation<HLSLHalf_t, OpType::Tan> {
+  ValidationConfig ValidationConfig = ValidationConfig::Ulp(2.0f);
+};
+
+template <> struct TrigonometricValidation<HLSLHalf_t, OpType::Sinh> {
+  ValidationConfig ValidationConfig = ValidationConfig::Ulp(2.0f);
+};
+
 #define TRIG_OP(OP, IMPL)                                                      \
-  template <typename T> struct Op<OP, T, 1> : TrigonometricValidation {        \
+  template <typename T> struct Op<OP, T, 1> : TrigonometricValidation<T, OP> { \
     T operator()(T A) { return IMPL; }                                         \
   }
 
@@ -1260,11 +1325,95 @@ FLOAT_SPECIAL_OP(OpType::IsInf, (std::isinf(A)));
 FLOAT_SPECIAL_OP(OpType::IsNan, (std::isnan(A)));
 #undef FLOAT_SPECIAL_OP
 
+template <typename T> struct Op<OpType::ModF, T, 1> : DefaultValidation<T> {};
+
+template <typename T> static T modF(T Input, T &OutParam);
+
+template <> float modF(float Input, float &OutParam) {
+  return std::modf(Input, &OutParam);
+}
+
+template <> HLSLHalf_t modF(HLSLHalf_t Input, HLSLHalf_t &OutParam) {
+  float Exp = 0.0f;
+  float Man = std::modf(float(Input), &Exp);
+  OutParam = HLSLHalf_t(Exp);
+  return Man;
+}
+
+template <typename T> struct ExpectedBuilder<OpType::ModF, T> {
+  static std::vector<T> buildExpected(Op<OpType::ModF, T, 1> &,
+                                      const InputSets<T> &Inputs) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+    size_t VectorSize = Inputs[0].size();
+
+    std::vector<T> Expected;
+    Expected.resize(VectorSize * 2);
+
+    for (size_t I = 0; I < VectorSize; ++I) {
+      T Exp;
+      T Man = modF(Inputs[0][I], Exp);
+      Expected[I] = Man;
+      Expected[I + VectorSize] = Exp;
+    }
+
+    return Expected;
+  }
+};
+
+//
+// Derivative Ops
+//
+
+// Coarse derivatives (ddx/ddy): All lanes in quad get same result
+// Fine derivatives (ddx_fine/ddy_fine): Each lane gets unique result
+// For testing, we validate results on lane 3 to keep validation generic
+//
+// The value of A in each lane is computed by : A = A + LaneID*2
+//
+// Top right (lane 1) - Top Left (lane 0)
+DEFAULT_OP_1(OpType::DerivativeDdx, ((A + 2) - (A + 0)));
+// Lower left (lane 2) -  Top Left (lane 0)
+DEFAULT_OP_1(OpType::DerivativeDdy, ((A + 4) - (A + 0)));
+
+// Bottom right (lane 3) - Bottom left (lane 2)
+DEFAULT_OP_1(OpType::DerivativeDdxFine, ((A + 6) - (A + 4)));
+// Bottom right (lane 3) - Top right (lane 1)
+DEFAULT_OP_1(OpType::DerivativeDdyFine, ((A + 6) - (A + 2)));
+
+//
+// Quad Read Ops
+//
+
+// We keep things generic so we can re-use this macro for all quad ops.
+// The lane we write to is determined via a defines in the shader code.
+// See TestQuadRead in ShaderOpArith.xml.
+// For all cases we simply fill the vector on that lane with the value of the
+// third element.
+#define QUAD_READ_OP(OP, ARITY)                                                \
+  template <typename T> struct Op<OP, T, ARITY> : DefaultValidation<T> {};     \
+  template <typename T> struct ExpectedBuilder<OP, T> {                        \
+    static std::vector<T> buildExpected(Op<OP, T, ARITY> &,                    \
+                                        const InputSets<T> &Inputs) {          \
+      DXASSERT_NOMSG(Inputs.size() == ARITY);                                  \
+      std::vector<T> Expected;                                                 \
+      const size_t VectorSize = Inputs[0].size();                              \
+      Expected.assign(VectorSize, Inputs[0][2]);                               \
+      return Expected;                                                         \
+    }                                                                          \
+  };
+
+QUAD_READ_OP(OpType::QuadReadLaneAt, 2);
+QUAD_READ_OP(OpType::QuadReadAcrossX, 1);
+QUAD_READ_OP(OpType::QuadReadAcrossY, 1);
+QUAD_READ_OP(OpType::QuadReadAcrossDiagonal, 1);
+
+#undef QUAD_READ_OP
+
 //
 // Wave Ops
 //
 
-#define WAVE_ACTIVE_OP(OP, IMPL)                                               \
+#define WAVE_OP(OP, IMPL)                                                      \
   template <typename T> struct Op<OP, T, 1> : DefaultValidation<T> {           \
     T operator()(T A, UINT WaveSize) { return IMPL; }                          \
   };
@@ -1274,7 +1423,7 @@ template <typename T> T waveActiveSum(T A, UINT WaveSize) {
   return A * WaveSizeT;
 }
 
-WAVE_ACTIVE_OP(OpType::WaveActiveSum, (waveActiveSum(A, WaveSize)));
+WAVE_OP(OpType::WaveActiveSum, (waveActiveSum(A, WaveSize)));
 
 template <typename T> T waveActiveMin(T A, UINT WaveSize) {
   std::vector<T> Values;
@@ -1284,7 +1433,7 @@ template <typename T> T waveActiveMin(T A, UINT WaveSize) {
   return *std::min_element(Values.begin(), Values.end());
 }
 
-WAVE_ACTIVE_OP(OpType::WaveActiveMin, (waveActiveMin(A, WaveSize)));
+WAVE_OP(OpType::WaveActiveMin, (waveActiveMin(A, WaveSize)));
 
 template <typename T> T waveActiveMax(T A, UINT WaveSize) {
   std::vector<T> Values;
@@ -1294,7 +1443,7 @@ template <typename T> T waveActiveMax(T A, UINT WaveSize) {
   return *std::max_element(Values.begin(), Values.end());
 }
 
-WAVE_ACTIVE_OP(OpType::WaveActiveMax, (waveActiveMax(A, WaveSize)));
+WAVE_OP(OpType::WaveActiveMax, (waveActiveMax(A, WaveSize)));
 
 template <typename T> T waveActiveProduct(T A, UINT WaveSize) {
   // We want to avoid overflow of a large product. So, the WaveActiveProdFn has
@@ -1303,9 +1452,223 @@ template <typename T> T waveActiveProduct(T A, UINT WaveSize) {
   return A * static_cast<T>(WaveSize - 1);
 }
 
-WAVE_ACTIVE_OP(OpType::WaveActiveProduct, (waveActiveProduct(A, WaveSize)));
+WAVE_OP(OpType::WaveActiveProduct, (waveActiveProduct(A, WaveSize)));
 
-#undef WAVE_ACTIVE_OP
+template <typename T> T waveActiveBitAnd(T A, UINT) {
+  // We set the LSB to 0 in one of the lanes.
+  return static_cast<T>(A & ~static_cast<T>(1));
+}
+
+WAVE_OP(OpType::WaveActiveBitAnd, (waveActiveBitAnd(A, WaveSize)));
+
+template <typename T> T waveActiveBitOr(T A, UINT) {
+  // We set the LSB to 1 in one of the lanes.
+  return static_cast<T>(A | static_cast<T>(1));
+}
+
+WAVE_OP(OpType::WaveActiveBitOr, (waveActiveBitOr(A, WaveSize)));
+
+template <typename T> T waveActiveBitXor(T A, UINT) {
+  // We clear the LSB in every lane except the last lane which sets it to 1.
+  return static_cast<T>(A | static_cast<T>(1));
+}
+
+WAVE_OP(OpType::WaveActiveBitXor, (waveActiveBitXor(A, WaveSize)));
+
+WAVE_OP(OpType::WaveMultiPrefixBitAnd, waveMultiPrefixBitAnd(A, WaveSize));
+
+template <typename T> T waveMultiPrefixBitAnd(T A, UINT) {
+  // All lanes in the group mask use a mask to filter for only the second and
+  // third LSBs.
+  return static_cast<T>(A & static_cast<T>(0x6));
+}
+
+WAVE_OP(OpType::WaveMultiPrefixBitOr, waveMultiPrefixBitOr(A, WaveSize));
+
+template <typename T> T waveMultiPrefixBitOr(T A, UINT) {
+  // All lanes in the group mask clear the second LSB.
+  return static_cast<T>(A & ~static_cast<T>(0x2));
+}
+
+template <typename T>
+struct Op<OpType::WaveMultiPrefixBitXor, T, 1> : StrictValidation {};
+
+template <typename T> struct ExpectedBuilder<OpType::WaveMultiPrefixBitXor, T> {
+  static std::vector<T> buildExpected(Op<OpType::WaveMultiPrefixBitXor, T, 1> &,
+                                      const InputSets<T> &Inputs, UINT) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+
+    std::vector<T> Expected;
+    const size_t VectorSize = Inputs[0].size();
+
+    // We get a little creative for MultiPrefixBitXor. The mask we use for the
+    // group in the shader is 0xE (0b1110), which includes lanes 1, 2, and 3.
+    // Prefix ops don't include the value of the current lane in their result.
+    // So, for this test we store the result of WaveMultiPrefixBitXor from lane
+    // 3. This means only the values from lanes 1 and 2 contribute to the result
+    // at lane 3.
+    //
+    // In the shader:
+    // - Lane 0: Set to 0 (not in mask, shouldn't affect result)
+    // - Lane 1: Keeps original input values
+    // - Lane 2: Lower half + last element set to 0, upper half keeps input
+    // - Lane 3: Stores the prefix XOR result (lanes 1 XOR lanes 2)
+    //
+    // Expected result: Lower half matches input (lane 1 XOR 0), upper half is
+    // 0s, except last element matches input.
+    for (size_t I = 0; I < VectorSize / 2; ++I)
+      Expected.push_back(Inputs[0][I]);
+    for (size_t I = VectorSize / 2; I < VectorSize - 1; ++I)
+      Expected.push_back(0);
+
+    // We also set the last element to 0 on lane 2 so the last element in the
+    // output vector matches the last element in the input vector.
+    Expected.push_back(Inputs[0][VectorSize - 1]);
+
+    return Expected;
+  }
+};
+
+template <typename T>
+struct Op<OpType::WaveActiveAllEqual, T, 1> : StrictValidation {};
+
+template <typename T> struct ExpectedBuilder<OpType::WaveActiveAllEqual, T> {
+  static std::vector<HLSLBool_t>
+  buildExpected(Op<OpType::WaveActiveAllEqual, T, 1> &,
+                const InputSets<T> &Inputs, UINT) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+
+    std::vector<HLSLBool_t> Expected;
+    const size_t VectorSize = Inputs[0].size();
+    Expected.assign(VectorSize, static_cast<HLSLBool_t>(true));
+    // We set the last element to a different value on a single lane.
+    Expected[VectorSize - 1] = static_cast<HLSLBool_t>(false);
+
+    return Expected;
+  }
+};
+
+template <typename T>
+struct Op<OpType::WaveReadLaneAt, T, 1> : StrictValidation {};
+
+template <typename T> struct ExpectedBuilder<OpType::WaveReadLaneAt, T> {
+  static std::vector<T> buildExpected(Op<OpType::WaveReadLaneAt, T, 1> &,
+                                      const InputSets<T> &Inputs, UINT) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+
+    std::vector<T> Expected;
+    const size_t VectorSize = Inputs[0].size();
+    // Simple test, on the lane that we read we also fill the vector with the
+    // value of the first element.
+    Expected.assign(VectorSize, Inputs[0][0]);
+
+    return Expected;
+  }
+};
+
+template <typename T>
+struct Op<OpType::WaveReadLaneFirst, T, 1> : StrictValidation {};
+
+template <typename T> struct ExpectedBuilder<OpType::WaveReadLaneFirst, T> {
+  static std::vector<T> buildExpected(Op<OpType::WaveReadLaneFirst, T, 1> &,
+                                      const InputSets<T> &Inputs, UINT) {
+    DXASSERT_NOMSG(Inputs.size() == 1);
+
+    std::vector<T> Expected;
+    const size_t VectorSize = Inputs[0].size();
+    // Simple test, on the lane that we read we also fill the vector with the
+    // value of the first element.
+    Expected.assign(VectorSize, Inputs[0][0]);
+
+    return Expected;
+  }
+};
+
+WAVE_OP(OpType::WavePrefixSum, (wavePrefixSum(A, WaveSize)));
+
+template <typename T> T wavePrefixSum(T A, UINT WaveSize) {
+  // We test the prefix sum in the 'middle' lane. This choice is arbitrary.
+  return A * static_cast<T>(WaveSize / 2);
+}
+
+WAVE_OP(OpType::WaveMultiPrefixSum, (waveMultiPrefixSum(A, WaveSize)));
+
+template <typename T> T waveMultiPrefixSum(T A, UINT) {
+  return A * static_cast<T>(2u);
+}
+
+WAVE_OP(OpType::WavePrefixProduct, (wavePrefixProduct(A, WaveSize)));
+
+template <typename T> T wavePrefixProduct(T A, UINT) {
+  // We test the the prefix product in the 3rd lane to avoid overflow issues.
+  // So the result is A * A.
+  return A * A;
+}
+
+WAVE_OP(OpType::WaveMultiPrefixProduct, (waveMultiPrefixProduct(A, WaveSize)));
+
+template <typename T> T waveMultiPrefixProduct(T A, UINT) {
+  // The group mask has 3 lanes.
+  return A * A;
+}
+
+template <typename T> struct Op<OpType::WaveMatch, T, 1> : StrictValidation {};
+
+static void WriteExpectedValueForLane(UINT *Dest, const UINT LaneID,
+                                      const std::bitset<128> &ExpectedValue) {
+  std::bitset<128> Lo32Mask;
+  Lo32Mask.set();
+  Lo32Mask >>= 128 - 32;
+
+  UINT Offset = 4 * LaneID;
+  for (uint32_t I = 0; I < 4; I++) {
+    uint32_t V = ((ExpectedValue >> (I * 32)) & Lo32Mask).to_ulong();
+    Dest[Offset++] = V;
+  }
+}
+
+template <typename T> struct ExpectedBuilder<OpType::WaveMatch, T> {
+  static std::vector<UINT> buildExpected(Op<OpType::WaveMatch, T, 1> &,
+                                         const InputSets<T> &Inputs,
+                                         const UINT WaveSize) {
+    // This test sets lanes (0, min(VectorSize/2, WaveSize/2), and
+    // min(VectorSize-1, WaveSize-1)) to unique values and has them modify the
+    // vector at their respective indices. Remaining lanes remain unchanged.
+    DXASSERT_NOMSG(Inputs.size() == 1);
+
+    const UINT VectorSize = static_cast<UINT>(Inputs[0].size());
+    std::vector<UINT> Expected;
+    Expected.assign(WaveSize * 4, 0);
+
+    const UINT MidLaneID = std::min(VectorSize / 2, WaveSize / 2);
+    const UINT LastLaneID = std::min(VectorSize - 1, WaveSize - 1);
+
+    // Use a std::bitset<128> to represent the uint4 returned by WaveMatch as
+    // its convenient this way in c++
+    std::bitset<128> DefaultExpectedValue;
+
+    for (UINT I = 0; I < WaveSize; ++I)
+      DefaultExpectedValue.set(I);
+
+    DefaultExpectedValue.reset(0);
+    DefaultExpectedValue.reset(MidLaneID);
+    DefaultExpectedValue.reset(LastLaneID);
+
+    for (UINT LaneID = 0; LaneID < WaveSize; ++LaneID) {
+      if (LaneID == 0 || LaneID == MidLaneID || LaneID == LastLaneID) {
+        std::bitset<128> ExpectedValue(0);
+        ExpectedValue.set(LaneID);
+        WriteExpectedValueForLane(Expected.data(), LaneID, ExpectedValue);
+        continue;
+      }
+      WriteExpectedValueForLane(Expected.data(), LaneID, DefaultExpectedValue);
+    }
+
+    return Expected;
+  }
+};
+
+#undef WAVE_OP
 
 //
 // dispatchTest
@@ -1348,9 +1711,6 @@ template <OpType OP, typename T> struct ExpectedBuilder {
 
     return Expected;
   }
-};
-
-template <OpType OP, typename T> struct WaveOpExpectedBuilder {
 
   static auto buildExpected(Op<OP, T, 1> Op, const InputSets<T> &Inputs,
                             UINT WaveSize) {
@@ -1424,14 +1784,13 @@ void dispatchWaveOpTest(ID3D12Device *D3DDevice, bool VerboseLogging,
 
   const std::string AdditionalCompilerOptions =
       "-DWAVE_SIZE=" + std::to_string(WaveSize) +
-      " -DNUMTHREADS_X=" + std::to_string(WaveSize);
+      " -DNUMTHREADS_XYZ=" + std::to_string(WaveSize) + ",1,1 ";
 
   for (size_t VectorSize : InputVectorSizes) {
     std::vector<std::vector<T>> Inputs =
         buildTestInputs<T>(VectorSize, Operation.InputSets, Operation.Arity);
 
-    auto Expected =
-        WaveOpExpectedBuilder<OP, T>::buildExpected(Op, Inputs, WaveSize);
+    auto Expected = ExpectedBuilder<OP, T>::buildExpected(Op, Inputs, WaveSize);
 
     runAndVerify(D3DDevice, VerboseLogging, Operation, Inputs, Expected,
                  Op.ValidationConfig, AdditionalCompilerOptions);
@@ -1449,26 +1808,16 @@ using namespace LongVector;
 #define HLK_WAVEOP_TEST(Op, DataType)                                          \
   TEST_METHOD(Op##_##DataType) {                                               \
     BEGIN_TEST_METHOD_PROPERTIES()                                             \
-    TEST_METHOD_PROPERTY(L"Priority", L"2")                                    \
+    TEST_METHOD_PROPERTY(                                                      \
+        "Kits.Specification",                                                  \
+        "Device.Graphics.D3D12.DXILCore.ShaderModel69.CoreRequirement")        \
     END_TEST_METHOD_PROPERTIES()                                               \
     runWaveOpTest<DataType, OpType::Op>();                                     \
   }
 
-class DxilConf_SM69_Vectorized {
+class TestClassCommon {
 public:
-  BEGIN_TEST_CLASS(DxilConf_SM69_Vectorized)
-  TEST_CLASS_PROPERTY("Kits.TestName",
-                      "D3D12 - Shader Model 6.9 - Vectorized DXIL - Core Tests")
-  TEST_CLASS_PROPERTY("Kits.TestId", "81db1ff8-5bc5-48a1-8d7b-600fc600a677")
-  TEST_CLASS_PROPERTY("Kits.Description",
-                      "Validates required SM 6.9 vectorized DXIL operations")
-  TEST_CLASS_PROPERTY(
-      "Kits.Specification",
-      "Device.Graphics.D3D12.DXILCore.ShaderModel69.CoreRequirement")
-  TEST_METHOD_PROPERTY(L"Priority", L"0")
-  END_TEST_CLASS()
-
-  TEST_CLASS_SETUP(classSetup) {
+  bool setupClass() {
     WEX::TestExecution::SetVerifyOutput verifySettings(
         WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
 
@@ -1476,37 +1825,7 @@ public:
     if (!Initialized) {
       Initialized = true;
 
-      HMODULE Runtime = LoadLibraryW(L"d3d12.dll");
-      if (Runtime == NULL)
-        return false;
-      // Do not: FreeLibrary(hRuntime);
-      // If we actually free the library, it defeats the purpose of
-      // enableAgilitySDK and enableExperimentalMode.
-
-      HRESULT HR;
-      HR = enableAgilitySDK(Runtime);
-
-      if (FAILED(HR))
-        hlsl_test::LogCommentFmt(L"Unable to enable Agility SDK - 0x%08x.", HR);
-      else if (HR == S_FALSE)
-        hlsl_test::LogCommentFmt(L"Agility SDK not enabled.");
-      else
-        hlsl_test::LogCommentFmt(L"Agility SDK enabled.");
-
-      HR = enableExperimentalMode(Runtime);
-      if (FAILED(HR))
-        hlsl_test::LogCommentFmt(
-            L"Unable to enable shader experimental mode - 0x%08x.", HR);
-      else if (HR == S_FALSE)
-        hlsl_test::LogCommentFmt(L"Experimental mode not enabled.");
-
-      HR = enableDebugLayer();
-      if (FAILED(HR))
-        hlsl_test::LogCommentFmt(L"Unable to enable debug layer - 0x%08x.", HR);
-      else if (HR == S_FALSE)
-        hlsl_test::LogCommentFmt(L"Debug layer not enabled.");
-      else
-        hlsl_test::LogCommentFmt(L"Debug layer enabled.");
+      D3D12SDK = D3D12SDKSelector();
 
       WEX::TestExecution::RuntimeParameters::TryGetValue(L"VerboseLogging",
                                                          VerboseLogging);
@@ -1543,21 +1862,41 @@ public:
           L"FailIfRequirementsNotMet", FailIfRequirementsNotMet);
 
       const bool SkipUnsupported = !FailIfRequirementsNotMet;
-      createDevice(&D3DDevice, ExecTestUtils::D3D_SHADER_MODEL_6_9,
-                   SkipUnsupported);
+      if (!D3D12SDK->createDevice(&D3DDevice, D3D_SHADER_MODEL_6_9,
+                                  SkipUnsupported)) {
+        if (FailIfRequirementsNotMet)
+          hlsl_test::LogErrorFmt(
+              L"Device Creation failed, resulting in test failure, since "
+              L"FailIfRequirementsNotMet is set. The expectation is that this "
+              L"test will only be executed if something has previously "
+              L"determined that the system meets the requirements of this "
+              L"test.");
+
+        return false;
+      }
     }
 
     return true;
   }
 
-  TEST_METHOD_SETUP(methodSetup) {
+  bool setupMethod() {
     // It's possible a previous test case caused a device removal. If it did we
     // need to try and create a new device.
-    if (!D3DDevice || D3DDevice->GetDeviceRemovedReason() != S_OK) {
-      hlsl_test::LogCommentFmt(
-          L"Device was lost: Attempting to create a new D3D12 device.");
-      VERIFY_IS_TRUE(
-          createDevice(&D3DDevice, ExecTestUtils::D3D_SHADER_MODEL_6_9, false));
+    if (D3DDevice && D3DDevice->GetDeviceRemovedReason() != S_OK) {
+      hlsl_test::LogCommentFmt(L"Device was lost!");
+      D3DDevice.Release();
+    }
+
+    if (!D3DDevice) {
+      hlsl_test::LogCommentFmt(L"Creating device");
+
+      // We expect this to succeed, and fail if it doesn't, because classSetup()
+      // has already ensured that the system configuration meets the
+      // requirements of all the tests in this class.
+      const bool SkipUnsupported = false;
+
+      VERIFY_IS_TRUE(D3D12SDK->createDevice(&D3DDevice, D3D_SHADER_MODEL_6_9,
+                                            SkipUnsupported));
     }
 
     return true;
@@ -1591,11 +1930,39 @@ public:
   template <typename T, OpType OP> void runTest() {
     WEX::TestExecution::SetVerifyOutput verifySettings(
         WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
+
     dispatchTest<T, OP>(D3DDevice, VerboseLogging, OverrideInputSize);
   }
 
-  // TernaryMath
+protected:
+  CComPtr<ID3D12Device> D3DDevice;
 
+private:
+  bool Initialized = false;
+  std::optional<D3D12SDKSelector> D3D12SDK;
+  bool VerboseLogging = false;
+  size_t OverrideInputSize = 0;
+  UINT OverrideWaveLaneCount = 0;
+};
+
+class DxilConf_SM69_Vectorized_Core : public TestClassCommon {
+public:
+  BEGIN_TEST_CLASS(DxilConf_SM69_Vectorized_Core)
+  TEST_CLASS_PROPERTY("Kits.TestName",
+                      "D3D12 - Shader Model 6.9 - Vectorized DXIL - Core Tests")
+  TEST_CLASS_PROPERTY("Kits.TestId", "81db1ff8-5bc5-48a1-8d7b-600fc600a677")
+  TEST_CLASS_PROPERTY("Kits.Description",
+                      "Validates required SM 6.9 vectorized DXIL operations")
+  TEST_CLASS_PROPERTY(
+      "Kits.Specification",
+      "Device.Graphics.D3D12.DXILCore.ShaderModel69.CoreRequirement")
+  TEST_METHOD_PROPERTY(L"Priority", L"0")
+  END_TEST_CLASS()
+
+  TEST_CLASS_SETUP(setupClass) { return TestClassCommon::setupClass(); }
+  TEST_METHOD_SETUP(setupMethod) { return TestClassCommon::setupMethod(); }
+
+  // TernaryMath
   HLK_TEST(Mad, uint16_t);
   HLK_TEST(Mad, uint32_t);
   HLK_TEST(Mad, uint64_t);
@@ -1604,11 +1971,8 @@ public:
   HLK_TEST(Mad, int64_t);
   HLK_TEST(Mad, HLSLHalf_t);
   HLK_TEST(Mad, float);
-  HLK_TEST(Fma, double);
-  HLK_TEST(Mad, double);
 
   // BinaryMath
-
   HLK_TEST(Add, HLSLBool_t);
   HLK_TEST(Subtract, HLSLBool_t);
   HLK_TEST(Add, int16_t);
@@ -1669,15 +2033,8 @@ public:
   HLK_TEST(Min, float);
   HLK_TEST(Max, float);
   HLK_TEST(Ldexp, float);
-  HLK_TEST(Add, double);
-  HLK_TEST(Subtract, double);
-  HLK_TEST(Multiply, double);
-  HLK_TEST(Divide, double);
-  HLK_TEST(Min, double);
-  HLK_TEST(Max, double);
 
   // Bitwise
-
   HLK_TEST(And, uint16_t);
   HLK_TEST(Or, uint16_t);
   HLK_TEST(Xor, uint16_t);
@@ -1734,20 +2091,35 @@ public:
   HLK_TEST(FirstBitLow, int64_t);
   HLK_TEST(Saturate, HLSLHalf_t);
   HLK_TEST(Saturate, float);
-  HLK_TEST(Saturate, double);
 
   // Unary
-
   HLK_TEST(Initialize, HLSLBool_t);
+  HLK_TEST(ArrayOperator_StaticAccess, HLSLBool_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, HLSLBool_t);
   HLK_TEST(Initialize, int16_t);
+  HLK_TEST(ArrayOperator_StaticAccess, int16_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, int16_t);
   HLK_TEST(Initialize, int32_t);
+  HLK_TEST(ArrayOperator_StaticAccess, int32_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, int32_t);
   HLK_TEST(Initialize, int64_t);
+  HLK_TEST(ArrayOperator_StaticAccess, int64_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, int64_t);
   HLK_TEST(Initialize, uint16_t);
+  HLK_TEST(ArrayOperator_StaticAccess, uint16_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, uint16_t);
   HLK_TEST(Initialize, uint32_t);
+  HLK_TEST(ArrayOperator_StaticAccess, uint32_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, uint32_t);
   HLK_TEST(Initialize, uint64_t);
+  HLK_TEST(ArrayOperator_StaticAccess, uint64_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, uint64_t);
   HLK_TEST(Initialize, HLSLHalf_t);
+  HLK_TEST(ArrayOperator_StaticAccess, HLSLHalf_t);
+  HLK_TEST(ArrayOperator_DynamicAccess, HLSLHalf_t);
   HLK_TEST(Initialize, float);
-  HLK_TEST(Initialize, double);
+  HLK_TEST(ArrayOperator_StaticAccess, float);
+  HLK_TEST(ArrayOperator_DynamicAccess, float);
 
   HLK_TEST(ShuffleVector, HLSLBool_t);
   HLK_TEST(ShuffleVector, int16_t);
@@ -1758,10 +2130,8 @@ public:
   HLK_TEST(ShuffleVector, uint64_t);
   HLK_TEST(ShuffleVector, HLSLHalf_t);
   HLK_TEST(ShuffleVector, float);
-  HLK_TEST(ShuffleVector, double);
 
   // Explicit Cast
-
   HLK_TEST(CastToInt16, HLSLBool_t);
   HLK_TEST(CastToInt32, HLSLBool_t);
   HLK_TEST(CastToInt64, HLSLBool_t);
@@ -1791,16 +2161,6 @@ public:
   HLK_TEST(CastToUint64_FromFP, float);
   HLK_TEST(CastToFloat16, float);
   HLK_TEST(CastToFloat64, float);
-
-  HLK_TEST(CastToBool, double);
-  HLK_TEST(CastToInt16, double);
-  HLK_TEST(CastToInt32, double);
-  HLK_TEST(CastToInt64, double);
-  HLK_TEST(CastToUint16_FromFP, double);
-  HLK_TEST(CastToUint32_FromFP, double);
-  HLK_TEST(CastToUint64_FromFP, double);
-  HLK_TEST(CastToFloat16, double);
-  HLK_TEST(CastToFloat32, double);
 
   HLK_TEST(CastToBool, uint16_t);
   HLK_TEST(CastToInt16, uint16_t);
@@ -1863,7 +2223,6 @@ public:
   HLK_TEST(CastToFloat64, int64_t);
 
   // Trigonometric
-
   HLK_TEST(Acos, HLSLHalf_t);
   HLK_TEST(Asin, HLSLHalf_t);
   HLK_TEST(Atan, HLSLHalf_t);
@@ -1884,7 +2243,6 @@ public:
   HLK_TEST(Tanh, float);
 
   // AsType
-
   HLK_TEST(AsFloat16, int16_t);
   HLK_TEST(AsInt16, int16_t);
   HLK_TEST(AsUint16, int16_t);
@@ -1904,7 +2262,6 @@ public:
   HLK_TEST(AsUint_SplitDouble, double);
 
   // Unary Math
-
   HLK_TEST(Abs, int16_t);
   HLK_TEST(Sign, int16_t);
   HLK_TEST(Abs, int32_t);
@@ -1948,21 +2305,19 @@ public:
   HLK_TEST(Log10, float);
   HLK_TEST(Log2, float);
   HLK_TEST(Frexp, float);
-  HLK_TEST(Abs, double);
-  HLK_TEST(Sign, double);
 
   // Float Special
-
   HLK_TEST(IsFinite, HLSLHalf_t);
   HLK_TEST(IsInf, HLSLHalf_t);
   HLK_TEST(IsNan, HLSLHalf_t);
+  HLK_TEST(ModF, HLSLHalf_t);
 
   HLK_TEST(IsFinite, float);
   HLK_TEST(IsInf, float);
   HLK_TEST(IsNan, float);
+  HLK_TEST(ModF, float);
 
   // Binary Comparison
-
   HLK_TEST(LessThan, int16_t);
   HLK_TEST(LessEqual, int16_t);
   HLK_TEST(GreaterThan, int16_t);
@@ -2011,15 +2366,8 @@ public:
   HLK_TEST(GreaterEqual, float);
   HLK_TEST(Equal, float);
   HLK_TEST(NotEqual, float);
-  HLK_TEST(LessThan, double);
-  HLK_TEST(LessEqual, double);
-  HLK_TEST(GreaterThan, double);
-  HLK_TEST(GreaterEqual, double);
-  HLK_TEST(Equal, double);
-  HLK_TEST(NotEqual, double);
 
   // Binary Logical
-
   HLK_TEST(Logical_And, HLSLBool_t);
   HLK_TEST(Logical_Or, HLSLBool_t);
 
@@ -2033,7 +2381,6 @@ public:
   HLK_TEST(Select, uint64_t);
   HLK_TEST(Select, HLSLHalf_t);
   HLK_TEST(Select, float);
-  HLK_TEST(Select, double);
 
   // Reduction
   HLK_TEST(Any_Mixed, HLSLBool_t);
@@ -2074,7 +2421,6 @@ public:
   // RD == Root Descriptor
   // DT == Descriptor Table
   // SB == Structured Buffer
-
   HLK_TEST(LoadAndStore_RDH_BAB_SRV, HLSLHalf_t);
   HLK_TEST(LoadAndStore_RDH_BAB_UAV, HLSLHalf_t);
   HLK_TEST(LoadAndStore_DT_BAB_SRV, HLSLHalf_t);
@@ -2192,62 +2538,316 @@ public:
   HLK_TEST(LoadAndStore_RD_SB_UAV, float);
   HLK_TEST(LoadAndStore_RD_SB_SRV, float);
 
-  HLK_TEST(LoadAndStore_RDH_BAB_SRV, double);
-  HLK_TEST(LoadAndStore_RDH_BAB_UAV, double);
-  HLK_TEST(LoadAndStore_DT_BAB_SRV, double);
-  HLK_TEST(LoadAndStore_DT_BAB_UAV, double);
-  HLK_TEST(LoadAndStore_RD_BAB_SRV, double);
-  HLK_TEST(LoadAndStore_RD_BAB_UAV, double);
-  HLK_TEST(LoadAndStore_RDH_SB_SRV, double);
-  HLK_TEST(LoadAndStore_RDH_SB_UAV, double);
-  HLK_TEST(LoadAndStore_DT_SB_SRV, double);
-  HLK_TEST(LoadAndStore_DT_SB_UAV, double);
-  HLK_TEST(LoadAndStore_RD_SB_SRV, double);
-  HLK_TEST(LoadAndStore_RD_SB_UAV, double);
+  // Derivative
+  HLK_TEST(DerivativeDdx, HLSLHalf_t);
+  HLK_TEST(DerivativeDdy, HLSLHalf_t);
+  HLK_TEST(DerivativeDdxFine, HLSLHalf_t);
+  HLK_TEST(DerivativeDdyFine, HLSLHalf_t);
+  HLK_TEST(DerivativeDdx, float);
+  HLK_TEST(DerivativeDdy, float);
+  HLK_TEST(DerivativeDdxFine, float);
+  HLK_TEST(DerivativeDdyFine, float);
+
+  // Quad
+  HLK_TEST(QuadReadLaneAt, HLSLBool_t);
+  HLK_TEST(QuadReadAcrossX, HLSLBool_t);
+  HLK_TEST(QuadReadAcrossY, HLSLBool_t);
+  HLK_TEST(QuadReadAcrossDiagonal, HLSLBool_t);
+  HLK_TEST(QuadReadLaneAt, int16_t);
+  HLK_TEST(QuadReadAcrossX, int16_t);
+  HLK_TEST(QuadReadAcrossY, int16_t);
+  HLK_TEST(QuadReadAcrossDiagonal, int16_t);
+  HLK_TEST(QuadReadLaneAt, int32_t);
+  HLK_TEST(QuadReadAcrossX, int32_t);
+  HLK_TEST(QuadReadAcrossY, int32_t);
+  HLK_TEST(QuadReadAcrossDiagonal, int32_t);
+  HLK_TEST(QuadReadLaneAt, int64_t);
+  HLK_TEST(QuadReadAcrossX, int64_t);
+  HLK_TEST(QuadReadAcrossY, int64_t);
+  HLK_TEST(QuadReadAcrossDiagonal, int64_t);
+  HLK_TEST(QuadReadLaneAt, uint16_t);
+  HLK_TEST(QuadReadAcrossX, uint16_t);
+  HLK_TEST(QuadReadAcrossY, uint16_t);
+  HLK_TEST(QuadReadAcrossDiagonal, uint16_t);
+  HLK_TEST(QuadReadLaneAt, uint32_t);
+  HLK_TEST(QuadReadAcrossX, uint32_t);
+  HLK_TEST(QuadReadAcrossY, uint32_t);
+  HLK_TEST(QuadReadAcrossDiagonal, uint32_t);
+  HLK_TEST(QuadReadLaneAt, uint64_t);
+  HLK_TEST(QuadReadAcrossX, uint64_t);
+  HLK_TEST(QuadReadAcrossY, uint64_t);
+  HLK_TEST(QuadReadAcrossDiagonal, uint64_t);
+  HLK_TEST(QuadReadLaneAt, HLSLHalf_t);
+  HLK_TEST(QuadReadAcrossX, HLSLHalf_t);
+  HLK_TEST(QuadReadAcrossY, HLSLHalf_t);
+  HLK_TEST(QuadReadAcrossDiagonal, HLSLHalf_t);
+  HLK_TEST(QuadReadLaneAt, float);
+  HLK_TEST(QuadReadAcrossX, float);
+  HLK_TEST(QuadReadAcrossY, float);
+  HLK_TEST(QuadReadAcrossDiagonal, float);
+
+  // Wave
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, HLSLBool_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, HLSLBool_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, HLSLBool_t);
+  HLK_WAVEOP_TEST(WaveMatch, HLSLBool_t);
 
   HLK_WAVEOP_TEST(WaveActiveSum, int16_t);
   HLK_WAVEOP_TEST(WaveActiveMin, int16_t);
   HLK_WAVEOP_TEST(WaveActiveMax, int16_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, int16_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, int16_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, int16_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, int16_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, int16_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, int16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, int16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, int16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, int16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, int16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, int16_t);
+  HLK_WAVEOP_TEST(WaveMatch, int16_t);
   HLK_WAVEOP_TEST(WaveActiveSum, int32_t);
   HLK_WAVEOP_TEST(WaveActiveMin, int32_t);
   HLK_WAVEOP_TEST(WaveActiveMax, int32_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, int32_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, int32_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, int32_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, int32_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, int32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, int32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, int32_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, int32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, int32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, int32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, int32_t);
+  HLK_WAVEOP_TEST(WaveMatch, int32_t);
   HLK_WAVEOP_TEST(WaveActiveSum, int64_t);
   HLK_WAVEOP_TEST(WaveActiveMin, int64_t);
   HLK_WAVEOP_TEST(WaveActiveMax, int64_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, int64_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, int64_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, int64_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, int64_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, int64_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, int64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, int64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, int64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, int64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, int64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, int64_t);
+  HLK_WAVEOP_TEST(WaveMatch, int64_t);
 
+  // Note: WaveActiveBit* ops don't support uint16_t in HLSL
+  // But the WaveMultiPrefixBit ops support all int and uint types
   HLK_WAVEOP_TEST(WaveActiveSum, uint16_t);
   HLK_WAVEOP_TEST(WaveActiveMin, uint16_t);
   HLK_WAVEOP_TEST(WaveActiveMax, uint16_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, uint16_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, uint16_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, uint16_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, uint16_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, uint16_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, uint16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, uint16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, uint16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, uint16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, uint16_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, uint16_t);
+  HLK_WAVEOP_TEST(WaveMatch, uint16_t);
   HLK_WAVEOP_TEST(WaveActiveSum, uint32_t);
   HLK_WAVEOP_TEST(WaveActiveMin, uint32_t);
   HLK_WAVEOP_TEST(WaveActiveMax, uint32_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, uint32_t);
+  HLK_WAVEOP_TEST(WaveActiveBitAnd, uint32_t);
+  HLK_WAVEOP_TEST(WaveActiveBitOr, uint32_t);
+  HLK_WAVEOP_TEST(WaveActiveBitXor, uint32_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, uint32_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, uint32_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, uint32_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, uint32_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, uint32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, uint32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, uint32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, uint32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, uint32_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, uint32_t);
+  HLK_WAVEOP_TEST(WaveMatch, uint32_t);
   HLK_WAVEOP_TEST(WaveActiveSum, uint64_t);
   HLK_WAVEOP_TEST(WaveActiveMin, uint64_t);
   HLK_WAVEOP_TEST(WaveActiveMax, uint64_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, uint64_t);
+  HLK_WAVEOP_TEST(WaveActiveBitAnd, uint64_t);
+  HLK_WAVEOP_TEST(WaveActiveBitOr, uint64_t);
+  HLK_WAVEOP_TEST(WaveActiveBitXor, uint64_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, uint64_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, uint64_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, uint64_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, uint64_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, uint64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, uint64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, uint64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitAnd, uint64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitOr, uint64_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixBitXor, uint64_t);
+  HLK_WAVEOP_TEST(WaveMatch, uint64_t);
 
   HLK_WAVEOP_TEST(WaveActiveSum, HLSLHalf_t);
   HLK_WAVEOP_TEST(WaveActiveMin, HLSLHalf_t);
   HLK_WAVEOP_TEST(WaveActiveMax, HLSLHalf_t);
   HLK_WAVEOP_TEST(WaveActiveProduct, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WavePrefixSum, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WavePrefixProduct, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, HLSLHalf_t);
+  HLK_WAVEOP_TEST(WaveMatch, HLSLHalf_t);
   HLK_WAVEOP_TEST(WaveActiveSum, float);
   HLK_WAVEOP_TEST(WaveActiveMin, float);
   HLK_WAVEOP_TEST(WaveActiveMax, float);
   HLK_WAVEOP_TEST(WaveActiveProduct, float);
-  HLK_WAVEOP_TEST(WaveActiveSum, double);
-  HLK_WAVEOP_TEST(WaveActiveMin, double);
-  HLK_WAVEOP_TEST(WaveActiveMax, double);
-  HLK_WAVEOP_TEST(WaveActiveProduct, double);
+  HLK_WAVEOP_TEST(WaveActiveAllEqual, float);
+  HLK_WAVEOP_TEST(WaveReadLaneAt, float);
+  HLK_WAVEOP_TEST(WaveReadLaneFirst, float);
+  HLK_WAVEOP_TEST(WavePrefixSum, float);
+  HLK_WAVEOP_TEST(WavePrefixProduct, float);
+  HLK_WAVEOP_TEST(WaveMultiPrefixSum, float);
+  HLK_WAVEOP_TEST(WaveMultiPrefixProduct, float);
+  HLK_WAVEOP_TEST(WaveMatch, float);
+};
 
-private:
-  bool Initialized = false;
-  bool VerboseLogging = false;
-  size_t OverrideInputSize = 0;
-  UINT OverrideWaveLaneCount = 0;
-  CComPtr<ID3D12Device> D3DDevice;
+#define HLK_TEST_DOUBLE(Op, DataType)                                          \
+  TEST_METHOD(Op##_##DataType) {                                               \
+    BEGIN_TEST_METHOD_PROPERTIES()                                             \
+    TEST_METHOD_PROPERTY(                                                      \
+        "Kits.Specification",                                                  \
+        "Device.Graphics.D3D12.DXILCore.ShaderModel69.DoublePrecision")        \
+    END_TEST_METHOD_PROPERTIES()                                               \
+    runTest<DataType, OpType::Op>();                                           \
+  }
+
+#define HLK_WAVEOP_TEST_DOUBLE(Op, DataType)                                   \
+  TEST_METHOD(Op##_##DataType) {                                               \
+    BEGIN_TEST_METHOD_PROPERTIES()                                             \
+    TEST_METHOD_PROPERTY(                                                      \
+        "Kits.Specification",                                                  \
+        "Device.Graphics.D3D12.DXILCore.ShaderModel69.DoublePrecision")        \
+    END_TEST_METHOD_PROPERTIES()                                               \
+    runWaveOpTest<DataType, OpType::Op>();                                     \
+  }
+
+class DxilConf_SM69_Vectorized_Double : public TestClassCommon {
+public:
+  BEGIN_TEST_CLASS(DxilConf_SM69_Vectorized_Double)
+  TEST_CLASS_PROPERTY(
+      "Kits.TestName",
+      "D3D12 - Shader Model 6.9 - Vectorized DXIL - Double Precision Tests")
+  TEST_CLASS_PROPERTY("Kits.TestId", "3a7a9687-6d99-469d-9951-795c2fcbe94d")
+  TEST_CLASS_PROPERTY(
+      "Kits.Description",
+      "Validates required double precision SM 6.9 vectorized DXIL operations")
+  TEST_METHOD_PROPERTY(
+      "Kits.Specification",
+      "Device.Graphics.D3D12.DXILCore.ShaderModel69.DoublePrecision")
+  TEST_METHOD_PROPERTY(L"Priority", L"0")
+  END_TEST_CLASS()
+
+  TEST_CLASS_SETUP(setupClass) {
+    const bool result = TestClassCommon::setupClass();
+#ifndef _HLK_CONF
+    if (result && !doesDeviceSupportDouble(D3DDevice)) {
+      WEX::Logging::Log::Comment(
+          L"Skipping test as device does not support double precision.");
+      WEX::Logging::Log::Result(WEX::Logging::TestResults::Skipped);
+      return false;
+    }
+#endif
+    return result;
+  }
+
+  TEST_METHOD_SETUP(setupMethod) { return TestClassCommon::setupMethod(); }
+
+  // TernaryMath
+  HLK_TEST_DOUBLE(Fma, double);
+  HLK_TEST_DOUBLE(Mad, double);
+
+  // BinaryMath
+  HLK_TEST_DOUBLE(Add, double);
+  HLK_TEST_DOUBLE(Subtract, double);
+  HLK_TEST_DOUBLE(Multiply, double);
+  HLK_TEST_DOUBLE(Divide, double);
+  HLK_TEST_DOUBLE(Min, double);
+  HLK_TEST_DOUBLE(Max, double);
+
+  // Bitwise
+  HLK_TEST_DOUBLE(Saturate, double);
+
+  // Unary
+  HLK_TEST_DOUBLE(Initialize, double);
+  HLK_TEST_DOUBLE(ArrayOperator_StaticAccess, double);
+  HLK_TEST_DOUBLE(ArrayOperator_DynamicAccess, double);
+
+  HLK_TEST_DOUBLE(ShuffleVector, double);
+
+  // Explicit Cast
+  HLK_TEST_DOUBLE(CastToBool, double);
+  HLK_TEST_DOUBLE(CastToInt16, double);
+  HLK_TEST_DOUBLE(CastToInt32, double);
+  HLK_TEST_DOUBLE(CastToInt64, double);
+  HLK_TEST_DOUBLE(CastToUint16_FromFP, double);
+  HLK_TEST_DOUBLE(CastToUint32_FromFP, double);
+  HLK_TEST_DOUBLE(CastToUint64_FromFP, double);
+  HLK_TEST_DOUBLE(CastToFloat16, double);
+  HLK_TEST_DOUBLE(CastToFloat32, double);
+
+  // Unary Math
+  HLK_TEST_DOUBLE(Abs, double);
+  HLK_TEST_DOUBLE(Sign, double);
+
+  // Binary Comparison
+  HLK_TEST_DOUBLE(LessThan, double);
+  HLK_TEST_DOUBLE(LessEqual, double);
+  HLK_TEST_DOUBLE(GreaterThan, double);
+  HLK_TEST_DOUBLE(GreaterEqual, double);
+  HLK_TEST_DOUBLE(Equal, double);
+  HLK_TEST_DOUBLE(NotEqual, double);
+
+  // Ternary Logical
+  HLK_TEST_DOUBLE(Select, double);
+
+  // LoadAndStore
+  HLK_TEST_DOUBLE(LoadAndStore_RDH_BAB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RDH_BAB_UAV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_DT_BAB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_DT_BAB_UAV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RD_BAB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RD_BAB_UAV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RDH_SB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RDH_SB_UAV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_DT_SB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_DT_SB_UAV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RD_SB_SRV, double);
+  HLK_TEST_DOUBLE(LoadAndStore_RD_SB_UAV, double);
+
+  // Quad
+  HLK_TEST_DOUBLE(QuadReadLaneAt, double);
+  HLK_TEST_DOUBLE(QuadReadAcrossX, double);
+  HLK_TEST_DOUBLE(QuadReadAcrossY, double);
+  HLK_TEST_DOUBLE(QuadReadAcrossDiagonal, double);
+
+  // Wave
+  HLK_WAVEOP_TEST_DOUBLE(WaveActiveSum, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveActiveMin, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveActiveMax, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveActiveProduct, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveActiveAllEqual, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveReadLaneAt, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveReadLaneFirst, double);
+  HLK_WAVEOP_TEST_DOUBLE(WavePrefixSum, double);
+  HLK_WAVEOP_TEST_DOUBLE(WavePrefixProduct, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveMultiPrefixSum, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveMultiPrefixProduct, double);
+  HLK_WAVEOP_TEST_DOUBLE(WaveMatch, double);
 };

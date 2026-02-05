@@ -23,26 +23,13 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "dxguid.lib")
 
-// A more recent Windows SDK than currently required is needed for these.
-typedef HRESULT(WINAPI *D3D12EnableExperimentalFeaturesFn)(
-    UINT NumFeatures, __in_ecount(NumFeatures) const IID *pIIDs,
-    __in_ecount_opt(NumFeatures) void *pConfigurationStructs,
-    __in_ecount_opt(NumFeatures) UINT *pConfigurationStructSizes);
-
-static const GUID D3D12ExperimentalShaderModelsID =
-    {/* 76f5573e-f13a-40f5-b297-81ce9e18933f */
-     0x76f5573e,
-     0xf13a,
-     0x40f5,
-     {0xb2, 0x97, 0x81, 0xce, 0x9e, 0x18, 0x93, 0x3f}};
-
 static HRESULT AtlCheck(HRESULT hr) {
   if (FAILED(hr))
     AtlThrow(hr);
   return hr;
 }
 
-#define DXEXP_HIGHEST_SHADER_MODEL D3D_SHADER_MODEL_6_8
+#define DXEXP_HIGHEST_SHADER_MODEL D3D_SHADER_MODEL_6_9
 
 static const char *BoolToStrJson(bool value) {
   return value ? "true" : "false";
@@ -84,6 +71,8 @@ static const char *ShaderModelToStr(D3D_SHADER_MODEL SM) {
     return "6.7";
   case D3D_SHADER_MODEL_6_8:
     return "6.8";
+  case D3D_SHADER_MODEL_6_9:
+    return "6.9";
   default:
     return "ERROR";
   }
@@ -301,26 +290,8 @@ int main(int argc, const char *argv[]) {
     return 1;
   }
 
-  D3D12EnableExperimentalFeaturesFn pD3D12EnableExperimentalFeatures =
-      (D3D12EnableExperimentalFeaturesFn)GetProcAddress(
-          hRuntime, "D3D12EnableExperimentalFeatures");
-  if (pD3D12EnableExperimentalFeatures == nullptr) {
-    err = GetLastError();
-    printf("Failed to find export 'D3D12EnableExperimentalFeatures' in "
-           "d3d12.dll - Win32 error %u%s\n",
-           (unsigned int)err,
-           err == ERROR_PROC_NOT_FOUND
-               ? " (The specified procedure could not be found.)"
-               : "");
-    printf("Consider verifying the operating system version - Creators Update "
-           "or newer "
-           "is currently required.\n");
-    PrintAdapters();
-    return 2;
-  }
-
-  HRESULT hr = pD3D12EnableExperimentalFeatures(
-      1, &D3D12ExperimentalShaderModelsID, nullptr, nullptr);
+  HRESULT hr = D3D12EnableExperimentalFeatures(
+      1, &D3D12ExperimentalShaderModels, nullptr, nullptr);
   if (SUCCEEDED(hr)) {
     text_printf("Experimental shader model feature succeeded.\n");
     hr = PrintAdapters();
