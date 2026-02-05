@@ -637,12 +637,7 @@ bool Parser::MaybeParseHLSLAttributes(std::vector<hlsl::UnusualAnnotation *> &ta
       // both registr() and packofset() would cause a crash without this fix.
 
       if (Tok.is(tok::l_paren)) {
-<<<<<<< HEAD
-        Diag(Tok.getLocation(), diag::err_hlsl_expected_hlsl_attribute)
-            << semanticName;
-=======
         Diag(Tok.getLocation(), diag::err_hlsl_expected_hlsl_attribute);
->>>>>>> 7936ebc894881a33eb24e44c207f336c98b1dd93
         ConsumeParen();
         SkipUntil(tok::r_paren, StopAtSemi); // skip through )
         return true;
