@@ -243,7 +243,7 @@ public:
   std::string TimeTrace = "";           // OPT_ftime_trace[EQ]
   unsigned TimeTraceGranularity = 500;  // OPT_ftime_trace_granularity_EQ
   bool VerifyDiagnostics = false;       // OPT_verify
-  UnusedResourceBinding UnusedResourceBinding =
+  UnusedResourceBinding UnusedResourceBindings =
       UnusedResourceBinding::Strip; // OPT_fhlsl_unused_resource_bindings_EQ
   bool Verbose = false;             // OPT_verbose
 
