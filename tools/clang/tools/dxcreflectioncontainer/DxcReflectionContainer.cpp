@@ -389,7 +389,7 @@ void ReflectionData::StripSymbols() {
 }
 
 void RecurseNameGenerationType(ReflectionData &Refl, uint32_t TypeId,
-                               uint32_t LocalId, const std::string &Parent) {
+                               const std::string &Parent) {
 
   const ReflectionVariableType &type = Refl.Types[TypeId];
 
@@ -402,7 +402,7 @@ void RecurseNameGenerationType(ReflectionData &Refl, uint32_t TypeId,
 
       Refl.FullyResolvedToMemberId[memberName] = memberId;
 
-      RecurseNameGenerationType(Refl, Refl.MemberTypeIds[memberId], i,
+      RecurseNameGenerationType(Refl, Refl.MemberTypeIds[memberId],
                                 memberName);
     }
 }
@@ -450,7 +450,7 @@ uint32_t RecurseNameGeneration(ReflectionData &Refl, uint32_t NodeId,
 
         Refl.FullyResolvedToMemberId[memberName] = memberId;
 
-        RecurseNameGenerationType(Refl, Refl.MemberTypeIds[memberId], i,
+        RecurseNameGenerationType(Refl, Refl.MemberTypeIds[memberId],
                                   memberName);
       }
   }
@@ -504,7 +504,8 @@ void ReflectionData::Dump(std::vector<std::byte> &Bytes) const {
       uint32_t(Parameters.size()),
       uint32_t(Statements.size()),
       uint32_t(IfSwitchStatements.size()),
-      uint32_t(BranchStatements.size())};
+      uint32_t(BranchStatements.size()),
+      0};
 
   toReserve += sizeof(HLSLReflectionDataHeader);
 
@@ -620,6 +621,10 @@ ReflectionData::Deserialize(const std::vector<std::byte> &Bytes,
     bool allowFwdDeclare = false;
 
     switch (node.GetNodeType()) {
+
+    default:
+        break;
+
     case D3D12_HLSL_NODE_TYPE_REGISTER:
       maxValue = header.Registers;
       break;
@@ -730,6 +735,9 @@ ReflectionData::Deserialize(const std::vector<std::byte> &Bytes,
     }
 
     switch (node.GetNodeType()) {
+
+    default:
+      break;
 
     case D3D12_HLSL_NODE_TYPE_USING:
     case D3D12_HLSL_NODE_TYPE_TYPEDEF:
@@ -878,6 +886,9 @@ ReflectionData::Deserialize(const std::vector<std::byte> &Bytes,
     case D3D12_HLSL_ENUM_TYPE_UINT16_T:
     case D3D12_HLSL_ENUM_TYPE_INT16_T:
       maxVal = uint16_t(-1);
+      break;
+
+    default:
       break;
     }
 
@@ -1152,6 +1163,9 @@ ReflectionData::Deserialize(const std::vector<std::byte> &Bytes,
       case D3D12_HLSL_ENUM_TYPE_UINT16_T:
       case D3D12_HLSL_ENUM_TYPE_INT16_T:
         maxVal = uint16_t(-1);
+        break;
+
+      default:
         break;
       }
 
