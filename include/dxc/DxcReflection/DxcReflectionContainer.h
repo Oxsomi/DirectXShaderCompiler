@@ -585,7 +585,7 @@ public:
   }
 };
 
-#ifndef _MSVC_VER
+#ifndef _MSC_VER
   #define MIGHT_BE_UNUSED __attribute__((unused)) 
 #else
   #define MIGHT_BE_UNUSED
