@@ -7,6 +7,11 @@
 //                                                                           //
 ///////////////////////////////////////////////////////////////////////////////
 
+#ifdef __clang__
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/HlslTypes.h"
@@ -44,6 +49,10 @@
 
 #include "dxc/DxcReflection/DxcReflectionContainer.h"
 #include "dxc/dxcreflect.h"
+
+#ifdef __clang__
+  #pragma clang diagnostic pop
+#endif
 
 #if _WIN32
 extern "C" const IID IID_IHLSLReflectionData = {

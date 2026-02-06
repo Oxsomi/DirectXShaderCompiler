@@ -14,6 +14,11 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef __clang__
+  #pragma clang diagnostic push
+  #pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
@@ -35,6 +40,10 @@
 #include "clang/Lex/Lexer.h"
 
 #include "dxc/DxcReflection/DxcReflectionContainer.h"
+
+#ifdef __clang__
+  #pragma clang diagnostic pop
+#endif
 
 using namespace clang;
 
