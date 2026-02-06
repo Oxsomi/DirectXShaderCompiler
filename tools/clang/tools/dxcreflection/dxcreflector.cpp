@@ -10,6 +10,8 @@
 #ifdef __clang__
   #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wunused-parameter"
+  #pragma clang diagnostic ignored "-Wunknown-pragmas"
+  #pragma clang diagnostic ignored "-Wswitch"
 #endif
 
 #include "clang/AST/ASTConsumer.h"
@@ -447,7 +449,8 @@ public:
                                   type.GetRows(),
                                   type.GetColumns(),
                                   node.GetInterpolationMode(),
-                                  D3D_PARAMETER_FLAGS(param.Flags)};
+                                  D3D_PARAMETER_FLAGS(param.Flags),
+                                  0, 0, 0, 0};
 
     return S_OK;
   }
@@ -721,6 +724,9 @@ struct HLSLReflectionData : public IHLSLReflectionData {
       FwdDeclType type = FwdDeclType::COUNT;
 
       switch (node.GetNodeType()) {
+
+      default:
+        break;
 
       case D3D12_HLSL_NODE_TYPE_STRUCT:
         type = FwdDeclType::STRUCT;

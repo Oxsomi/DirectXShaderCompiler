@@ -17,6 +17,8 @@
 #ifdef __clang__
   #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wunused-parameter"
+  #pragma clang diagnostic ignored "-Wunknown-pragmas"
+  #pragma clang diagnostic ignored "-Wswitch"
 #endif
 
 #include "llvm/ADT/ArrayRef.h"
@@ -545,7 +547,7 @@ static DxcRegisterTypeInfo GetRegisterTypeInfo(ASTContext &ASTCtx,
   if (typeName == "SamplerState" || typeName == "SamplerComparisonState") {
     return {D3D_SIT_SAMPLER, typeName == "SamplerComparisonState"
                                  ? D3D_SIF_COMPARISON_SAMPLER
-                                 : (D3D_SHADER_INPUT_FLAGS)0};
+                                 : (D3D_SHADER_INPUT_FLAGS)0, (D3D_SRV_DIMENSION)0, (D3D_RESOURCE_RETURN_TYPE)0 };
   }
 
   DxcRegisterTypeInfo info = {};
@@ -592,6 +594,7 @@ static DxcRegisterTypeInfo GetRegisterTypeInfo(ASTContext &ASTCtx,
     return info;
   }
 
+  (void) isFeedback;    //TODO:
   return GetTextureRegisterInfo(ASTCtx, typeName, isWrite, recordDecl);
 }
 
@@ -818,7 +821,7 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
 
         D3D_SHADER_VARIABLE_TYPE svt = it->second;
 
-        if (svt == -1) { // Reserved as 'vector'
+        if (svt == D3D_SHADER_VARIABLE_TYPE(-1)) { // Reserved as 'vector'
 
           rows = 1;
 
@@ -833,7 +836,7 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
           standardType = true;
         }
 
-        else if (svt == -2) { // Reserved as 'matrix'
+        else if (svt == D3D_SHADER_VARIABLE_TYPE(-2)) { // Reserved as 'matrix'
 
           assert(params.size() == 3 &&
                  params[0].getKind() == TemplateArgument::Type &&
@@ -1158,6 +1161,9 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
   case D3D_SVC_MATRIX_COLUMNS:
     underlyingName += std::to_string(rows) + "x" + std::to_string(columns);
     break;
+
+  default:
+    break;
   }
 
   // Insert
@@ -1261,6 +1267,9 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
   bool isListType = true;
 
   switch (inputType.RegisterType) {
+
+  default:
+    break;
 
   case D3D_SIT_CBUFFER:
   case D3D_SIT_TBUFFER:
@@ -2314,6 +2323,9 @@ public:
 
     case TTK_Interface:
       type = D3D12_HLSL_NODE_TYPE_INTERFACE;
+      break;
+
+    default:
       break;
     }
 
