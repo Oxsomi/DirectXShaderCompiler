@@ -526,6 +526,7 @@ GetTextureRegisterInfo(ASTContext &ASTCtx, std::string TypeName, bool IsWrite,
   if (isArray) // Arrays are always 1 behind the regular type
     type.TextureDimension = (D3D_SRV_DIMENSION)(type.TextureDimension + 1);
 
+  (void) isFeedback;    //TODO:
   return type;
 }
 
@@ -594,7 +595,6 @@ static DxcRegisterTypeInfo GetRegisterTypeInfo(ASTContext &ASTCtx,
     return info;
   }
 
-  (void) isFeedback;    //TODO:
   return GetTextureRegisterInfo(ASTCtx, typeName, isWrite, recordDecl);
 }
 

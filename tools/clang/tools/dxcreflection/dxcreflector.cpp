@@ -623,7 +623,8 @@ public:
 
     *pDesc = D3D12_SHADER_BUFFER_DESC{
         GetName(), m_BufferType, m_ChildCount,
-        0 // TODO: Size when we have it
+        0, // TODO: Size when we have it
+        0
     };
 
     return S_OK;
