@@ -939,19 +939,19 @@ static void PrintValue(JsonWriter &Json, D3D12_HLSL_ENUM_TYPE type, uint64_t v,
   switch (type) {
 
   case D3D12_HLSL_ENUM_TYPE_INT:
-    Json.IntField("Value", int32_t(uint32_t(v)));
+    Json.IntField(Name, int32_t(uint32_t(v)));
     break;
 
   case D3D12_HLSL_ENUM_TYPE_INT64_T:
-    Json.IntField("Value", int64_t(v));
+    Json.IntField(Name, int64_t(v));
     break;
 
   case D3D12_HLSL_ENUM_TYPE_INT16_T:
-    Json.IntField("Value", int16_t(uint16_t(v)));
+    Json.IntField(Name, int16_t(uint16_t(v)));
     break;
 
   default:
-    Json.UIntField("Value", v);
+    Json.UIntField(Name, v);
     break;
   }
 }
@@ -1372,11 +1372,11 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
 
     if (stmt.HasConditionVar())
       Json.Object("Switch", [&stmt, &Reflection, &Json, &Settings, NodeId,
-                             &childrenToSkip, nodeType, hasSymbols]() {
+                             &childrenToSkip, hasSymbols]() {
         uint32_t start = NodeId + 1;
 
         if (stmt.HasConditionVar())
-          Json.Object("Condition", [NodeId, &Reflection, &Json, &start,
+          Json.Object("Condition", [&Reflection, &Json, &start,
                                     &Settings, hasSymbols]() {
             if (hasSymbols)
               PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
@@ -1488,7 +1488,7 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
         }
       });
 
-      json.Array("Enums", [this, &json, hasSymbols, &settings] {
+      json.Array("Enums", [this, &json, &settings] {
         for (uint32_t i = 0; i < uint32_t(Enums.size()); ++i) {
           JsonWriter::ObjectScope nodeRoot(json);
           PrintEnum(json, *this, i, settings);
@@ -1496,14 +1496,14 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
       });
 
       json.Array(
-          "EnumValues", [this, &json, HideFileInfo, &settings] {
+          "EnumValues", [this, &json, &settings] {
             for (uint32_t i = 0; i < uint32_t(EnumValues.size()); ++i) {
               JsonWriter::ObjectScope valueRoot(json);
               PrintEnumValue(json, *this, EnumValues[i].NodeId, settings);
             }
           });
 
-      json.Array("Annotations", [this, &json, hasSymbols] {
+      json.Array("Annotations", [this, &json] {
         for (uint32_t i = 0; i < uint32_t(Annotations.size()); ++i) {
           const ReflectionAnnotation &annot = Annotations[i];
           JsonWriter::ObjectScope valueRoot(json);
