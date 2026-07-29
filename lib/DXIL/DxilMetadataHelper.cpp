@@ -91,6 +91,7 @@ const char DxilMDHelper::kDxilNonUniformAttributeMDName[] = "dx.nonuniform";
 const char DxilMDHelper::kDxilValidatorVersionMDName[] = "dx.valver";
 const char DxilMDHelper::kDxilDxrPayloadAnnotationsMDName[] =
     "dx.dxrPayloadAnnotations";
+const char DxilMDHelper::kDxilTargetTypesMDName[] = "dx.targetTypes";
 
 // This named metadata is not valid in final module (should be moved to
 // DxilContainer)
@@ -117,7 +118,7 @@ const char DxilMDHelper::kDxilSourceArgsOldMDName[] = "llvm.dbg.args";
 // This is reflection-only metadata
 const char DxilMDHelper::kDxilCountersMDName[] = "dx.counters";
 
-static std::array<const char *, 8> DxilMDNames = {{
+static std::array<const char *, 9> DxilMDNames = {{
     DxilMDHelper::kDxilVersionMDName,
     DxilMDHelper::kDxilShaderModelMDName,
     DxilMDHelper::kDxilEntryPointsMDName,
@@ -126,6 +127,7 @@ static std::array<const char *, 8> DxilMDNames = {{
     DxilMDHelper::kDxilValidatorVersionMDName,
     DxilMDHelper::kDxilViewIdStateMDName,
     DxilMDHelper::kDxilDxrPayloadAnnotationsMDName,
+    DxilMDHelper::kDxilTargetTypesMDName,
 }};
 
 DxilMDHelper::DxilMDHelper(Module *pModule,
@@ -1349,8 +1351,7 @@ Metadata *DxilMDHelper::EmitDxilFieldAnnotation(const DxilFieldAnnotation &FA) {
     MDVals.emplace_back(Uint32ToConstMD(kDxilFieldAnnotationResPropTag));
     MDVals.emplace_back(ValueAsMetadata::get(resource_helper::getAsConstant(
         FA.GetResourceProperties(),
-        m_pModule->GetDxilModule().GetOP()->GetResourcePropertiesType(),
-        *m_pSM)));
+        resource_helper::GetResourcePropertiesType(*m_pModule), *m_pSM)));
   }
   if (DXIL::CompareVersions(m_MinValMajor, m_MinValMinor, 1, 7) >= 0) {
     if (FA.HasBitFields()) {
@@ -1632,7 +1633,9 @@ MDTuple *DxilMDHelper::EmitDxilEntryProperties(uint64_t rawShaderFlag,
     }
 
     const hlsl::ShaderModel *SM = GetShaderModel();
-    if (SM->IsSMAtLeast(6, 10)) {
+    if (SM->IsSMAtLeast(6, 10) &&
+        props.groupSharedLimitBytes !=
+            DxilFunctionProps::kGroupSharedLimitUnset) {
       MDVals.emplace_back(
           Uint32ToConstMD(DxilMDHelper::kDxilGroupSharedLimitTag));
       MDVals.emplace_back(Uint32ToConstMD(props.groupSharedLimitBytes));
@@ -1701,6 +1704,15 @@ MDTuple *DxilMDHelper::EmitDxilEntryProperties(uint64_t rawShaderFlag,
                                         MS.maxPrimitiveCount, MS.outputTopology,
                                         MS.payloadSizeInBytes);
     MDVals.emplace_back(pMDTuple);
+
+    const hlsl::ShaderModel *SM = GetShaderModel();
+    if (SM->IsSMAtLeast(6, 10) &&
+        props.groupSharedLimitBytes !=
+            DxilFunctionProps::kGroupSharedLimitUnset) {
+      MDVals.emplace_back(
+          Uint32ToConstMD(DxilMDHelper::kDxilGroupSharedLimitTag));
+      MDVals.emplace_back(Uint32ToConstMD(props.groupSharedLimitBytes));
+    }
   } break;
   case DXIL::ShaderKind::Amplification: {
     auto &AS = props.ShaderProps.AS;
@@ -1708,6 +1720,15 @@ MDTuple *DxilMDHelper::EmitDxilEntryProperties(uint64_t rawShaderFlag,
     MDTuple *pMDTuple =
         EmitDxilASState(props.numThreads, AS.payloadSizeInBytes);
     MDVals.emplace_back(pMDTuple);
+
+    const hlsl::ShaderModel *SM = GetShaderModel();
+    if (SM->IsSMAtLeast(6, 10) &&
+        props.groupSharedLimitBytes !=
+            DxilFunctionProps::kGroupSharedLimitUnset) {
+      MDVals.emplace_back(
+          Uint32ToConstMD(DxilMDHelper::kDxilGroupSharedLimitTag));
+      MDVals.emplace_back(Uint32ToConstMD(props.groupSharedLimitBytes));
+    }
   } break;
   case DXIL::ShaderKind::Node: {
     // The Node specific properties have already been handled by
@@ -1720,6 +1741,15 @@ MDTuple *DxilMDHelper::EmitDxilEntryProperties(uint64_t rawShaderFlag,
     NumThreadVals.emplace_back(Uint32ToConstMD(props.numThreads[1]));
     NumThreadVals.emplace_back(Uint32ToConstMD(props.numThreads[2]));
     MDVals.emplace_back(MDNode::get(m_Ctx, NumThreadVals));
+
+    const hlsl::ShaderModel *SM = GetShaderModel();
+    if (SM->IsSMAtLeast(6, 10) &&
+        props.groupSharedLimitBytes !=
+            DxilFunctionProps::kGroupSharedLimitUnset) {
+      MDVals.emplace_back(
+          Uint32ToConstMD(DxilMDHelper::kDxilGroupSharedLimitTag));
+      MDVals.emplace_back(Uint32ToConstMD(props.groupSharedLimitBytes));
+    }
   } break;
   default:
     break;
@@ -1787,7 +1817,8 @@ void DxilMDHelper::LoadDxilEntryProperties(const MDOperand &MDO,
     } break;
 
     case DxilMDHelper::kDxilGroupSharedLimitTag: {
-      DXASSERT(props.IsCS(), "else invalid shader kind");
+      DXASSERT(props.IsCS() || props.IsMS() || props.IsAS() || props.IsNode(),
+               "else invalid shader kind");
       props.groupSharedLimitBytes = ConstMDToUint32(MDO);
       if (!m_pSM->IsSMAtLeast(6, 10))
         m_bExtraMetadata = true;
@@ -3310,6 +3341,11 @@ bool DxilMDHelper::IsKnownNamedMetaData(const llvm::NamedMDNode &Node) {
     }
   }
   return false;
+}
+
+bool DxilMDHelper::IsKnownGeneratedMetaData(const llvm::NamedMDNode &Node) {
+  return IsKnownNamedMetaData(Node) &&
+         Node.getName() != DxilMDHelper::kDxilTargetTypesMDName;
 }
 
 bool DxilMDHelper::IsKnownMetadataID(LLVMContext &Ctx, unsigned ID) {

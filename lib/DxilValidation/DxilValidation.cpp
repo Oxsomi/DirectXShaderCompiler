@@ -974,290 +974,78 @@ static void ValidateImmOperandForMathDxilOp(CallInst *CI, DXIL::OpCode Opcode,
   }
 }
 
-static bool CheckLinalgInterpretation(uint32_t Input, bool InRegister) {
-  using CT = DXIL::ComponentType;
-  switch (static_cast<CT>(Input)) {
-  case CT::I16:
-  case CT::U16:
-  case CT::I32:
-  case CT::U32:
-  case CT::F16:
-  case CT::F32:
-  case CT::U8:
-  case CT::I8:
-  case CT::F8_E4M3:
-  case CT::F8_E5M2:
-    return true;
-  case CT::PackedS8x32:
-  case CT::PackedU8x32:
-    return InRegister;
-  default:
-    return false;
-  }
-}
+static void ValidateLinAlgOpParameters(CallInst *CI,
+                                       ValidationContext &ValCtx) {
+  for (uint32_t Idx = 0; Idx < CI->getNumArgOperands(); ++Idx) {
+    Value *Arg = CI->getArgOperand(Idx);
+    Type *Ty = Arg->getType();
 
-static bool CheckMatrixLayoutForMatVecMulOps(unsigned Layout) {
-  return Layout <=
-         static_cast<unsigned>(DXIL::LinalgMatrixLayout::OuterProductOptimal);
-}
+    // No parameters may be undef
+    if (isa<UndefValue>(Arg))
+      ValCtx.EmitInstrError(CI, ValidationRule::InstrNoReadingUninitialized);
 
-std::string GetMatrixLayoutStr(unsigned Layout) {
-  switch (static_cast<DXIL::LinalgMatrixLayout>(Layout)) {
-  case DXIL::LinalgMatrixLayout::RowMajor:
-    return "RowMajor";
-  case DXIL::LinalgMatrixLayout::ColumnMajor:
-    return "ColumnMajor";
-  case DXIL::LinalgMatrixLayout::MulOptimal:
-    return "MulOptimal";
-  case DXIL::LinalgMatrixLayout::OuterProductOptimal:
-    return "OuterProductOptimal";
-  default:
-    DXASSERT_NOMSG(false);
-    return "Invalid";
-  }
-}
-
-static bool CheckTransposeForMatrixLayout(unsigned Layout, bool Transposed) {
-  switch (static_cast<DXIL::LinalgMatrixLayout>(Layout)) {
-  case DXIL::LinalgMatrixLayout::RowMajor:
-  case DXIL::LinalgMatrixLayout::ColumnMajor:
-    return !Transposed;
-
-  default:
-    return true;
-  }
-}
-
-static bool CheckUnsignedFlag(Type *VecTy, bool IsUnsigned) {
-  Type *ElemTy = VecTy->getScalarType();
-  if (ElemTy->isFloatingPointTy())
-    return !IsUnsigned;
-
-  return true;
-}
-
-static Value *GetMatVecOpIsOutputUnsigned(CallInst *CI, DXIL::OpCode OpCode) {
-  switch (OpCode) {
-  case DXIL::OpCode::MatVecMul:
-    return CI->getOperand(DXIL::OperandIndex::kMatVecMulIsOutputUnsignedIdx);
-  case DXIL::OpCode::MatVecMulAdd:
-    return CI->getOperand(DXIL::OperandIndex::kMatVecMulAddIsOutputUnsignedIdx);
-
-  default:
-    DXASSERT_NOMSG(false);
-    return nullptr;
-  }
-}
-
-static void ValidateImmOperandsForMatVecOps(CallInst *CI, DXIL::OpCode OpCode,
-                                            ValidationContext &ValCtx) {
-
-  llvm::Value *IsInputUnsigned =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulIsInputUnsignedIdx);
-  ConstantInt *IsInputUnsignedConst =
-      dyn_cast<llvm::ConstantInt>(IsInputUnsigned);
-  if (!IsInputUnsignedConst) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrMatVecOpIsUnsignedFlagsAreConst,
-        {"IsInputUnsigned"});
-    return;
-  }
-
-  llvm::Value *IsOutputUnsigned = GetMatVecOpIsOutputUnsigned(CI, OpCode);
-  ConstantInt *IsOutputUnsignedConst =
-      dyn_cast<llvm::ConstantInt>(IsOutputUnsigned);
-  if (!IsOutputUnsignedConst) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrMatVecOpIsUnsignedFlagsAreConst,
-        {"IsOutputUnsigned"});
-    return;
-  }
-
-  llvm::Value *InputInterpretation =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulInputInterpretationIdx);
-  ConstantInt *II = dyn_cast<ConstantInt>(InputInterpretation);
-  if (!II) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInterpretationParamAreConst,
-        {"InputInterpretation"});
-    return;
-  }
-  uint64_t IIValue = II->getLimitedValue();
-  if (!CheckLinalgInterpretation(IIValue, true)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInvalidRegisterInterpValue,
-        {std::to_string(IIValue), "Input"});
-    return;
-  }
-
-  llvm::Value *MatrixInterpretation =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulMatrixInterpretationIdx);
-  ConstantInt *MI = dyn_cast<ConstantInt>(MatrixInterpretation);
-  if (!MI) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInterpretationParamAreConst,
-        {"MatrixInterpretation"});
-    return;
-  }
-  uint64_t MIValue = MI->getLimitedValue();
-  if (!CheckLinalgInterpretation(MIValue, false)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInvalidMemoryInterpValue,
-        {std::to_string(MIValue), "Matrix"});
-    return;
-  }
-
-  llvm::Value *MatrixM =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulMatrixMIdx);
-  if (!llvm::isa<llvm::Constant>(MatrixM)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixShapeParamsAreConst,
-        {"Matrix M dimension"});
-    return;
-  }
-
-  llvm::Value *MatrixK =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulMatrixKIdx);
-  if (!llvm::isa<llvm::Constant>(MatrixK)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixShapeParamsAreConst,
-        {"Matrix K dimension"});
-    return;
-  }
-
-  llvm::Value *MatrixLayout =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulMatrixLayoutIdx);
-
-  ConstantInt *MatrixLayoutConst = dyn_cast<ConstantInt>(MatrixLayout);
-  if (!MatrixLayoutConst) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixShapeParamsAreConst,
-        {"Matrix Layout"});
-    return;
-  }
-  uint64_t MLValue = MatrixLayoutConst->getLimitedValue();
-  if (!CheckMatrixLayoutForMatVecMulOps(MLValue)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInvalidMatrixLayoutValueForMatVecOps,
-        {std::to_string(MLValue),
-         std::to_string(
-             static_cast<unsigned>(DXIL::LinalgMatrixLayout::RowMajor)),
-         std::to_string(static_cast<unsigned>(
-             DXIL::LinalgMatrixLayout::OuterProductOptimal))});
-    return;
-  }
-
-  llvm::Value *MatrixTranspose =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulMatrixTransposeIdx);
-  ConstantInt *MatrixTransposeConst = dyn_cast<ConstantInt>(MatrixTranspose);
-  if (!MatrixTransposeConst) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixShapeParamsAreConst,
-        {"MatrixTranspose"});
-    return;
-  }
-
-  if (!CheckTransposeForMatrixLayout(MLValue,
-                                     MatrixTransposeConst->getLimitedValue())) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixLayoutNotTransposable,
-        {GetMatrixLayoutStr(MLValue)});
-    return;
-  }
-
-  llvm::Value *InputVector =
-      CI->getOperand(DXIL::OperandIndex::kMatVecMulInputVectorIdx);
-  if (!CheckUnsignedFlag(InputVector->getType(),
-                         IsInputUnsignedConst->getLimitedValue())) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgNotAnUnsignedType, {"Input"});
-    return;
-  }
-
-  if (!CheckUnsignedFlag(CI->getType(),
-                         IsOutputUnsignedConst->getLimitedValue())) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgNotAnUnsignedType, {"Output"});
-    return;
-  }
-
-  switch (OpCode) {
-  case DXIL::OpCode::MatVecMulAdd: {
-    llvm::Value *BiasInterpretation =
-        CI->getOperand(DXIL::OperandIndex::kMatVecMulAddBiasInterpretation);
-    ConstantInt *BI = cast<ConstantInt>(BiasInterpretation);
-    if (!BI) {
-      ValCtx.EmitInstrFormatError(
-          CI, ValidationRule::InstrLinalgInterpretationParamAreConst,
-          {"BiasInterpretation"});
-      return;
+    // If we have a LinAlg Matrix, validate that we have correct metadata.
+    if (!dxilutil::IsHLSLLinAlgMatrixType(Ty))
+      continue;
+    if (ValCtx.LinAlgTargetTypeMap.find(Ty) ==
+        ValCtx.LinAlgTargetTypeMap.end()) {
+      ValCtx.EmitInstrError(CI, ValidationRule::MetaWellFormed);
+      continue;
     }
-    uint64_t BIValue = BI->getLimitedValue();
-    if (!CheckLinalgInterpretation(BIValue, false)) {
-      ValCtx.EmitInstrFormatError(
-          CI, ValidationRule::InstrLinalgInvalidMemoryInterpValue,
-          {std::to_string(BIValue), "Bias vector"});
-      return;
+  }
+}
+
+static void ValidateLinAlgOpReturnMatrix(CallInst *CI,
+                                         ValidationContext &ValCtx) {
+  Type *Ty = CI->getType();
+  assert(dxilutil::IsHLSLLinAlgMatrixType(Ty) && "CI must return a matrix");
+
+  // Metadata is malformed if we don't have metadata
+  auto it = ValCtx.LinAlgTargetTypeMap.find(Ty);
+  if (it == ValCtx.LinAlgTargetTypeMap.end()) {
+    ValCtx.EmitInstrError(CI, ValidationRule::MetaWellFormed);
+    return;
+  }
+
+  LinAlgTargetType LATT = it->second;
+
+  // Validate the K dim is in bounds. Which dim is K depends on use.
+  // This validation isn't applied to an accumulator matrix
+  if (LATT.Use != DXIL::MatrixUse::Accumulator) {
+    unsigned MinK = DXIL::kLinAlgMatrixMinK;
+    unsigned K = (LATT.Use == DXIL::MatrixUse::A) ? LATT.N : LATT.M;
+    unsigned MaxK = DXIL::kLinAlgMatrixMaxK;
+    if (LATT.Scope == DXIL::MatrixScope::ThreadGroup) {
+      MinK = DXIL::kLinAlgThreadGroupMatrixMinK;
+      MaxK = DXIL::kLinAlgThreadGroupMatrixMaxK;
     }
-  } break;
-  default:
+    if (K < MinK || K > MaxK)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgIllegalKDim,
+          {std::to_string(K), std::to_string(MinK), std::to_string(MaxK)});
+  }
+
+  // Validate the ComponentType is allowed
+  switch (LATT.Type) {
+  case DXIL::ComponentType::I8:
+  case DXIL::ComponentType::I16:
+  case DXIL::ComponentType::I32:
+  case DXIL::ComponentType::I64:
+  case DXIL::ComponentType::U8:
+  case DXIL::ComponentType::U16:
+  case DXIL::ComponentType::U32:
+  case DXIL::ComponentType::U64:
+  case DXIL::ComponentType::F8_E4M3FN:
+  case DXIL::ComponentType::F8_E5M2:
+  case DXIL::ComponentType::F16:
+  case DXIL::ComponentType::F32:
+  case DXIL::ComponentType::F64:
     break;
-  }
-}
-
-static void ValidateImmOperandsForOuterProdAcc(CallInst *CI,
-                                               ValidationContext &ValCtx) {
-
-  llvm::Value *MatrixInterpretation =
-      CI->getOperand(DXIL::OperandIndex::kOuterProdAccMatrixInterpretation);
-  ConstantInt *MI = cast<ConstantInt>(MatrixInterpretation);
-  if (!MI) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInterpretationParamAreConst,
-        {"MatrixInterpretation"});
-    return;
-  }
-  uint64_t MIValue = MI->getLimitedValue();
-  if (!CheckLinalgInterpretation(MIValue, false)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgInvalidMemoryInterpValue,
-        {std::to_string(MIValue), "Matrix"});
-    return;
-  }
-
-  llvm::Value *MatrixLayout =
-      CI->getOperand(DXIL::OperandIndex::kOuterProdAccMatrixLayout);
-  if (!llvm::isa<llvm::Constant>(MatrixLayout)) {
-    ValCtx.EmitInstrFormatError(
-        CI, ValidationRule::InstrLinalgMatrixShapeParamsAreConst,
-        {"MatrixLayout"});
-    return;
-  }
-  ConstantInt *ML = cast<ConstantInt>(MatrixLayout);
-  uint64_t MLValue = ML->getLimitedValue();
-  if (MLValue !=
-      static_cast<unsigned>(DXIL::LinalgMatrixLayout::OuterProductOptimal))
-    ValCtx.EmitInstrFormatError(
-        CI,
-        ValidationRule::
-            InstrLinalgInvalidMatrixLayoutValueForOuterProductAccumulate,
-        {GetMatrixLayoutStr(MLValue),
-         GetMatrixLayoutStr(static_cast<unsigned>(
-             DXIL::LinalgMatrixLayout::OuterProductOptimal))});
-
-  llvm::Value *MatrixStride =
-      CI->getOperand(DXIL::OperandIndex::kOuterProdAccMatrixStride);
-  if (!llvm::isa<llvm::Constant>(MatrixStride)) {
-    ValCtx.EmitInstrError(
-        CI, ValidationRule::InstrLinalgMatrixStrideZeroForOptimalLayouts);
-    return;
-  }
-  ConstantInt *MS = cast<ConstantInt>(MatrixStride);
-  uint64_t MSValue = MS->getLimitedValue();
-  if (MSValue != 0) {
-    ValCtx.EmitInstrError(
-        CI, ValidationRule::InstrLinalgMatrixStrideZeroForOptimalLayouts);
-    return;
+  default:
+    ValCtx.EmitInstrFormatError(CI,
+                                ValidationRule::InstrLinAlgIllegalComponentType,
+                                {ComponentTypeToString(LATT.Type)});
+    break;
   }
 }
 
@@ -2000,7 +1788,7 @@ static void ValidateDxilOperationCallInProfile(CallInst *CI,
       ShaderKind = DXIL::ShaderKind::Hull;
   }
 
-  // These shader models are treted like compute
+  // These shader models are treated like compute
   bool IsCSLike = ShaderKind == DXIL::ShaderKind::Compute ||
                   ShaderKind == DXIL::ShaderKind::Mesh ||
                   ShaderKind == DXIL::ShaderKind::Amplification ||
@@ -2455,16 +2243,6 @@ static void ValidateDxilOperationCallInProfile(CallInst *CI,
                                  GetLaunchTypeStr(NodeLaunchType)});
 
     break;
-  case DXIL::OpCode::MatVecMul:
-  case DXIL::OpCode::MatVecMulAdd:
-    ValidateImmOperandsForMatVecOps(CI, Opcode, ValCtx);
-    break;
-  case DXIL::OpCode::OuterProductAccumulate:
-    ValidateImmOperandsForOuterProdAcc(CI, ValCtx);
-    break;
-  case DXIL::OpCode::VectorAccumulate:
-
-    break;
   case DXIL::OpCode::IsInf:
   case DXIL::OpCode::IsNaN:
   case DXIL::OpCode::IsFinite:
@@ -2474,6 +2252,151 @@ static void ValidateDxilOperationCallInProfile(CallInst *CI,
       ValCtx.EmitInstrFormatError(CI, ValidationRule::SmIsSpecialFloat, {});
     break;
   }
+
+  // LinAlg Operations
+  case DXIL::OpCode::LinAlgMatrixLength:
+  case DXIL::OpCode::LinAlgMatrixGetCoordinate:
+  case DXIL::OpCode::LinAlgMatrixGetElement:
+  case DXIL::OpCode::LinAlgMatrixStoreToDescriptor:
+  case DXIL::OpCode::LinAlgMatrixStoreToMemory:
+  case DXIL::OpCode::LinAlgMatVecMul:
+  case DXIL::OpCode::LinAlgMatVecMulAdd:
+  case DXIL::OpCode::LinAlgMatrixAccumulateToDescriptor:
+  case DXIL::OpCode::LinAlgMatrixAccumulateToMemory:
+  case DXIL::OpCode::LinAlgConvert:
+  case DXIL::OpCode::LinAlgVectorAccumulateToDescriptor: {
+    ValidateLinAlgOpParameters(CI, ValCtx);
+    break;
+  }
+  case DXIL::OpCode::LinAlgFillMatrix:
+  case DXIL::OpCode::LinAlgMatrixLoadFromDescriptor:
+  case DXIL::OpCode::LinAlgMatrixLoadFromMemory:
+  case DXIL::OpCode::LinAlgMatrixSetElement:
+  case DXIL::OpCode::LinAlgMatrixMultiply:
+  case DXIL::OpCode::LinAlgMatrixMultiplyAccumulate:
+  case DXIL::OpCode::LinAlgMatrixOuterProduct: {
+    ValidateLinAlgOpReturnMatrix(CI, ValCtx);
+    ValidateLinAlgOpParameters(CI, ValCtx);
+    break;
+  }
+  case DXIL::OpCode::LinAlgMatrixAccumulate: {
+    ValidateLinAlgOpReturnMatrix(CI, ValCtx);
+    ValidateLinAlgOpParameters(CI, ValCtx);
+
+    Type *RetMatTy = CI->getType();
+    Type *LHSMatTy = CI->getArgOperand(1)->getType();
+    Type *RHSMatTy = CI->getArgOperand(2)->getType();
+    assert(dxilutil::IsHLSLLinAlgMatrixType(RetMatTy) &&
+           dxilutil::IsHLSLLinAlgMatrixType(LHSMatTy) &&
+           dxilutil::IsHLSLLinAlgMatrixType(RHSMatTy) &&
+           "Must be LinAlg types");
+
+    // Ret and LHS must have the exact same type
+    if (RetMatTy != LHSMatTy) {
+      StructType *RetST = cast<StructType>(RetMatTy);
+      StructType *LHSST = cast<StructType>(LHSMatTy);
+
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixNotExactMatch,
+          {RetST->getName(), LHSST->getName()});
+    }
+    auto RetIt = ValCtx.LinAlgTargetTypeMap.find(RetMatTy);
+    auto RHSIt = ValCtx.LinAlgTargetTypeMap.find(RHSMatTy);
+    if (RetIt == ValCtx.LinAlgTargetTypeMap.end())
+      break;
+    if (RHSIt == ValCtx.LinAlgTargetTypeMap.end())
+      break;
+    LinAlgTargetType RetLATT = RetIt->second;
+    LinAlgTargetType RHSLATT = RHSIt->second;
+
+    if (RetLATT.Use != DXIL::MatrixUse::Accumulator)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixUseMismatch,
+          {MatrixUseToString(RetLATT.Use), "Accumulator"});
+
+    if (RHSLATT.Use == DXIL::MatrixUse::Accumulator)
+      ValCtx.EmitInstrFormatError(CI,
+                                  ValidationRule::InstrLinAlgMatrixUseMismatch2,
+                                  {MatrixUseToString(RHSLATT.Use), "A", "B"});
+
+    if (RetLATT.Scope != RHSLATT.Scope)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixScopeMismatch,
+          {MatrixScopeToString(RHSLATT.Scope),
+           MatrixScopeToString(RetLATT.Scope)});
+
+    if (RetLATT.Scope == DXIL::MatrixScope::Thread)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixScopeNotAllowed,
+          {"Thread", "LinAlgMatrixAccumulate"});
+
+    if (RetLATT.M != RHSLATT.M || RetLATT.N != RHSLATT.N)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixDimMismatch,
+          {std::to_string(RHSLATT.M), std::to_string(RHSLATT.N),
+           std::to_string(RetLATT.M), std::to_string(RetLATT.N)});
+
+    break;
+  }
+  case DXIL::OpCode::LinAlgCopyConvertMatrix: {
+    ValidateLinAlgOpReturnMatrix(CI, ValCtx);
+    ValidateLinAlgOpParameters(CI, ValCtx);
+
+    Type *DstMatTy = CI->getType();
+    Type *SrcMatTy = CI->getArgOperand(1)->getType();
+    assert(dxilutil::IsHLSLLinAlgMatrixType(DstMatTy) &&
+           dxilutil::IsHLSLLinAlgMatrixType(SrcMatTy) &&
+           "Must be LinAlg types");
+
+    Value *TransposeOp = CI->getArgOperand(2);
+    ConstantInt *TransposeCI = dyn_cast<ConstantInt>(TransposeOp);
+    bool Transpose = false;
+
+    if (TransposeCI)
+      Transpose = TransposeCI->isOne();
+    else
+      ValCtx.EmitInstrFormatError(CI, ValidationRule::InstrOpConst,
+                                  {"Transpose", "LinAlgCopyConvertMatrix"});
+
+    auto DstIt = ValCtx.LinAlgTargetTypeMap.find(DstMatTy);
+    auto SrcIt = ValCtx.LinAlgTargetTypeMap.find(SrcMatTy);
+    if (DstIt == ValCtx.LinAlgTargetTypeMap.end())
+      break;
+    if (SrcIt == ValCtx.LinAlgTargetTypeMap.end())
+      break;
+    LinAlgTargetType DstLATT = DstIt->second;
+    LinAlgTargetType SrcLATT = SrcIt->second;
+
+    if (DstLATT.Scope == DXIL::MatrixScope::Thread ||
+        SrcLATT.Scope == DXIL::MatrixScope::Thread)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixScopeNotAllowed,
+          {"Thread", "LinAlgCopyConvertMatrix"});
+
+    if (DstLATT.Scope != SrcLATT.Scope)
+      ValCtx.EmitInstrFormatError(
+          CI, ValidationRule::InstrLinAlgMatrixScopeMismatch,
+          {MatrixScopeToString(DstLATT.Scope),
+           MatrixScopeToString(SrcLATT.Scope)});
+
+    unsigned DstM = DstLATT.M;
+    unsigned DstN = DstLATT.N;
+    unsigned SrcM = SrcLATT.M;
+    unsigned SrcN = SrcLATT.N;
+    if (Transpose) {
+      SrcM = SrcLATT.N;
+      SrcN = SrcLATT.M;
+    }
+
+    if (DstM != SrcM || DstN != SrcN)
+      ValCtx.EmitInstrFormatError(CI,
+                                  ValidationRule::InstrLinAlgMatrixDimMismatch,
+                                  {std::to_string(DstM), std::to_string(DstN),
+                                   std::to_string(SrcM), std::to_string(SrcN)});
+
+    break;
+  }
+
   default:
     // TODO: make sure every Opcode is checked.
     // Skip opcodes don't need special check.
@@ -2659,6 +2582,19 @@ static bool IsDxilBuiltinStructType(StructType *ST, hlsl::OP *HlslOP) {
   }
 }
 
+static bool IsValidIntBitWidth(unsigned Width) {
+  switch (Width) {
+  case 1:
+  case 8:
+  case 16:
+  case 32:
+  case 64:
+    return true;
+  default:
+    return false;
+  }
+}
+
 // outer type may be: [ptr to][1 dim array of]( UDT struct | scalar )
 // inner type (UDT struct member) may be: [N dim array of]( UDT struct | scalar
 // ) scalar type may be: ( float(16|32|64) | int(16|32|64) )
@@ -2698,6 +2634,9 @@ static bool ValidateType(Type *Ty, ValidationContext &ValCtx,
       // Allow HitObject type.
       if (ST == HlslOP->GetHitObjectType())
         return true;
+      // Allow LinAlgMatrix type.
+      if (dxilutil::IsHLSLLinAlgMatrixType(ST))
+        return true;
       if (IsDxilBuiltinStructType(ST, HlslOP)) {
         ValCtx.EmitTypeError(Ty, ValidationRule::InstrDxilStructUser);
         Result = false;
@@ -2717,8 +2656,7 @@ static bool ValidateType(Type *Ty, ValidationContext &ValCtx,
     return true;
   }
   if (Ty->isIntegerTy()) {
-    unsigned Width = Ty->getIntegerBitWidth();
-    if (Width != 1 && Width != 8 && Width != 16 && Width != 32 && Width != 64) {
+    if (!IsValidIntBitWidth(Ty->getIntegerBitWidth())) {
       ValCtx.EmitTypeError(Ty, ValidationRule::TypesIntWidth);
       return false;
     }
@@ -3388,10 +3326,13 @@ static void ValidateFunctionBody(Function *F, ValidationContext &ValCtx) {
           }
         }
         if (IntegerType *IT = dyn_cast<IntegerType>(op->getType())) {
-          if (IT->getBitWidth() == 8) {
+          unsigned BW = IT->getBitWidth();
+          if (BW == 8) {
             // We always fail if we see i8 as operand type of a non-lifetime
             // instruction.
             ValCtx.EmitInstrError(&I, ValidationRule::TypesI8);
+          } else {
+            ValidateType(IT, ValCtx);
           }
         }
       }
@@ -3402,12 +3343,15 @@ static void ValidateFunctionBody(Function *F, ValidationContext &ValCtx) {
       while (isa<ArrayType>(Ty))
         Ty = Ty->getArrayElementType();
       if (IntegerType *IT = dyn_cast<IntegerType>(Ty)) {
-        if (IT->getBitWidth() == 8) {
+        unsigned BW = IT->getBitWidth();
+        if (BW == 8) {
           // Allow i8* cast for llvm.lifetime.* intrinsics.
           if (!SupportsLifetimeIntrinsics || !isa<BitCastInst>(I) ||
               !onlyUsedByLifetimeMarkers(&I)) {
             ValCtx.EmitInstrError(&I, ValidationRule::TypesI8);
           }
+        } else {
+          ValidateType(IT, ValCtx);
         }
       }
 
@@ -3581,21 +3525,24 @@ static void ValidateFunctionBody(Function *F, ValidationContext &ValCtx) {
 
       if (PointerType *PT = dyn_cast<PointerType>(I.getType())) {
         if (PT->getAddressSpace() == DXIL::kTGSMAddrSpace) {
-          if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-            Value *Ptr = GEP->getPointerOperand();
-            // Allow inner constant GEP
-            if (isa<ConstantExpr>(Ptr) && isa<GEPOperator>(Ptr))
-              Ptr = cast<GEPOperator>(Ptr)->getPointerOperand();
-            if (!isa<GlobalVariable>(Ptr)) {
-              ValCtx.EmitInstrError(
-                  &I, ValidationRule::InstrFailToResloveTGSMPointer);
+          // Walk through GEPs and bitcasts to ensure the pointer ultimately
+          // comes from a global variable. This was unnecessary before SM 6.9
+          // because everything was scalarized, but now we can have arrays of
+          // vectors in TGSM, so we need to allow GEPs and bitcasts.
+          if (isa<GetElementPtrInst>(&I) || isa<BitCastInst>(&I)) {
+            Value *Ptr = cast<Instruction>(&I)->getOperand(0);
+            while (Ptr) {
+              if (GEPOperator *GEP = dyn_cast<GEPOperator>(Ptr)) {
+                Ptr = GEP->getPointerOperand();
+                continue;
+              }
+              if (BitCastOperator *BC = dyn_cast<BitCastOperator>(Ptr)) {
+                Ptr = BC->getOperand(0);
+                continue;
+              }
+              break;
             }
-          } else if (BitCastInst *BCI = dyn_cast<BitCastInst>(&I)) {
-            Value *Ptr = BCI->getOperand(0);
-            // Allow inner constant GEP
-            if (isa<ConstantExpr>(Ptr) && isa<GEPOperator>(Ptr))
-              Ptr = cast<GEPOperator>(Ptr)->getPointerOperand();
-            if (!isa<GetElementPtrInst>(Ptr) && !isa<GlobalVariable>(Ptr)) {
+            if (!isa<GlobalVariable>(Ptr)) {
               ValCtx.EmitInstrError(
                   &I, ValidationRule::InstrFailToResloveTGSMPointer);
             }
@@ -3916,70 +3863,156 @@ static void ValidateGlobalVariables(ValidationContext &ValCtx) {
   DxilModule &M = ValCtx.DxilMod;
 
   const ShaderModel *pSM = ValCtx.DxilMod.GetShaderModel();
-  bool TGSMAllowed = pSM->IsCS() || pSM->IsAS() || pSM->IsMS() || pSM->IsLib();
-
-  unsigned TGSMSize = 0;
-  std::vector<StoreInst *> FixAddrTGSMList;
   const DataLayout &DL = M.GetModule()->getDataLayout();
+  std::vector<StoreInst *> FixAddrTGSMList;
+
+  auto isTGSMEntry = [](DXIL::ShaderKind Kind) -> bool {
+    return Kind == DXIL::ShaderKind::Compute ||
+           Kind == DXIL::ShaderKind::Amplification ||
+           Kind == DXIL::ShaderKind::Mesh || Kind == DXIL::ShaderKind::Node;
+  };
+
+  auto getMaxTGSM = [](const DxilFunctionProps &Props) -> unsigned {
+    if (Props.groupSharedLimitBytes >= 0)
+      return static_cast<unsigned>(Props.groupSharedLimitBytes);
+    if (Props.IsCS() || Props.IsAS() || Props.IsNode())
+      return DXIL::kMaxTGSMSize;
+    else if (Props.IsMS())
+      return DXIL::kMaxMSSMSize;
+    return 0;
+  };
+
+  DenseMap<const Function *, uint32_t> TGSMInFunc;
+  // Initialize all function TGSM usage to zero
+  for (auto &function : M.GetModule()->getFunctionList())
+    TGSMInFunc[&function] = 0;
+
+  // Map TGSM overages per function, used for error reporting
+  // Tracks first user per GV that caused overage.
+  typedef MapVector<GlobalVariable *, Instruction *> FirstUserMap;
+  typedef DenseMap<const Function *, FirstUserMap> TGSMOverageMap;
+  TGSMOverageMap TGSMOverages;
+
+  auto ReportTGSMOverages = [&](Function *EntryFunc) {
+    unsigned Size = TGSMInFunc[EntryFunc];
+    if (!Size)
+      return; // No TGSM used.
+
+    // Several possibilities:
+    // - Entry point or library function with function properties
+    // - Patch constant function without function properties, TGSM not allowed
+    // - No-inline function without function properties, TGSM counted in entry
+    DXIL::ShaderKind Kind = DXIL::ShaderKind::Invalid;
+    bool IsPatchConstant = M.IsPatchConstantShader(EntryFunc);
+    if (M.HasDxilFunctionProps(EntryFunc))
+      Kind = M.GetDxilEntryProps(EntryFunc).props.shaderKind;
+    else if (!IsPatchConstant)
+      return; // no-inline function, accounted for in entry
+
+    auto Overages = TGSMOverages.find(EntryFunc);
+    if (Overages == TGSMOverages.end())
+      return;
+
+    unsigned MaxSize = 0;
+    ValidationRule Rule = ValidationRule::SmMaxTGSMSizeOnEntry;
+
+    // Props only exist if not a patch constant function.
+    if (!IsPatchConstant) {
+      DxilFunctionProps &Props = M.GetDxilFunctionProps(EntryFunc);
+      MaxSize = getMaxTGSM(Props);
+      Rule = Props.groupSharedLimitBytes !=
+                     DxilFunctionProps::kGroupSharedLimitUnset
+                 ? ValidationRule::SmExplicitTGSMSizeOnEntry
+                 : ValidationRule::SmMaxTGSMSizeOnEntry;
+    }
+
+    for (auto &GVAndUser : Overages->second) {
+      Instruction *UseInst = GVAndUser.second;
+      if (!isTGSMEntry(Kind))
+        ValCtx.EmitInstrFormatError(UseInst, ValidationRule::SmTGSMUnsupported,
+                                    {"from non-compute entry points"});
+      else
+        ValCtx.EmitInstrFormatError(UseInst, Rule,
+                                    {EntryFunc->getName(), std::to_string(Size),
+                                     std::to_string(MaxSize)});
+    }
+  };
+
+  struct WorkListEntry {
+    User *U;
+    // FirstUser tracks the first (inner-most) instruction user of the TGSM
+    // variable for this worklist entry.
+    Instruction *FirstUser;
+  };
+
+  // Collect total groupshared memory potentially used by every function
   for (GlobalVariable &GV : M.GetModule()->globals()) {
     ValidateGlobalVariable(GV, ValCtx);
     if (GV.getType()->getAddressSpace() == DXIL::kTGSMAddrSpace) {
-      if (!TGSMAllowed)
-        ValCtx.EmitGlobalVariableFormatError(
-            &GV, ValidationRule::SmTGSMUnsupported,
-            {std::string("in Shader Model ") + M.GetShaderModel()->GetName()});
-      // Lib targets need to check the usage to know if it's allowed
-      if (pSM->IsLib()) {
-        for (User *U : GV.users()) {
-          if (Instruction *I = dyn_cast<Instruction>(U)) {
-            llvm::Function *F = I->getParent()->getParent();
+      SmallPtrSet<llvm::Function *, 8> completeFuncs;
+      SmallVector<WorkListEntry, 16> WorkList;
+      auto AddUsers = [&WorkList](User *U, Instruction *FirstUser) {
+        for (User *U : U->users()) {
+          if (!FirstUser && isa<Instruction>(U))
+            WorkList.push_back({U, cast<Instruction>(U)});
+          else
+            WorkList.push_back({U, FirstUser});
+        }
+      };
+      uint32_t GVSize = DL.getTypeAllocSize(GV.getType()->getElementType());
+
+      AddUsers(&GV, nullptr);
+
+      while (!WorkList.empty()) {
+        WorkListEntry Info = WorkList.pop_back_val();
+        // If const, keep going until we find something we can use
+        if (isa<Constant>(Info.U)) {
+          AddUsers(Info.U, Info.FirstUser);
+          continue;
+        }
+
+        if (Instruction *I = dyn_cast<Instruction>(Info.U)) {
+          llvm::Function *F = I->getParent()->getParent();
+          if (completeFuncs.insert(F).second) {
+            // If function is new, process it and its users
+            // Add users to the worklist
+            Instruction *FirstUser = Info.FirstUser ? Info.FirstUser : I;
+            AddUsers(F, FirstUser);
+            // Add groupshared size to function's total
+            unsigned &TotalSize = TGSMInFunc[F];
+            TotalSize += GVSize;
+            // If this is an entry function, check the TotalSize against the
+            // limits.
             if (M.HasDxilEntryProps(F)) {
-              DxilFunctionProps &Props = M.GetDxilEntryProps(F).props;
-              if (!Props.IsCS() && !Props.IsAS() && !Props.IsMS() &&
-                  !Props.IsNode()) {
-                ValCtx.EmitInstrFormatError(I,
-                                            ValidationRule::SmTGSMUnsupported,
-                                            {"from non-compute entry points"});
-              }
+              const DxilFunctionProps &Props = M.GetDxilEntryProps(F).props;
+              unsigned MaxSize = getMaxTGSM(Props);
+              if (TotalSize > MaxSize && TGSMOverages[F].count(&GV) == 0)
+                TGSMOverages[F][&GV] = FirstUser;
+            } else if (M.IsPatchConstantShader(F)) {
+              // Collect illegal usage for error reporting
+              if (TGSMOverages[F].count(&GV) == 0)
+                TGSMOverages[F][&GV] = FirstUser;
             }
           }
         }
       }
-      TGSMSize += DL.getTypeAllocSize(GV.getType()->getElementType());
       CollectFixAddressAccess(&GV, FixAddrTGSMList);
     }
   }
 
-  ValidationRule Rule = ValidationRule::SmMaxTGSMSize;
-  unsigned MaxSize = DXIL::kMaxTGSMSize;
-
-  if (M.GetShaderModel()->IsMS()) {
-    Rule = ValidationRule::SmMaxMSSMSize;
-    MaxSize = DXIL::kMaxMSSMSize;
-  }
-
-  // Check if the entry function has attribute to override TGSM size.
-  if (M.HasDxilEntryProps(M.GetEntryFunction())) {
-    DxilEntryProps &EntryProps = M.GetDxilEntryProps(M.GetEntryFunction());
-    if (EntryProps.props.IsCS()) {
-      unsigned SpecifiedTGSMSize = EntryProps.props.groupSharedLimitBytes;
-      if (SpecifiedTGSMSize > 0) {
-        MaxSize = SpecifiedTGSMSize;
-      }
+  if (pSM->IsLib()) {
+    for (auto &F : M.GetModule()->functions()) {
+      if (F.isDeclaration() ||
+          !(M.HasDxilEntryProps(&F) || M.IsPatchConstantShader(&F)))
+        continue;
+      ReportTGSMOverages(&F);
     }
-  }
-
-  if (TGSMSize > MaxSize) {
-    Module::global_iterator GI = M.GetModule()->global_end();
-    GlobalVariable *GV = &*GI;
-    do {
-      GI--;
-      GV = &*GI;
-      if (GV->getType()->getAddressSpace() == hlsl::DXIL::kTGSMAddrSpace)
-        break;
-    } while (GI != M.GetModule()->global_begin());
-    ValCtx.EmitGlobalVariableFormatError(
-        GV, Rule, {std::to_string(TGSMSize), std::to_string(MaxSize)});
+  } else {
+    Function *EntryFunc = M.GetEntryFunction();
+    if (EntryFunc)
+      ReportTGSMOverages(EntryFunc);
+    if (pSM->IsHS())
+      ReportTGSMOverages(M.GetPatchConstantFunction());
   }
 
   if (!FixAddrTGSMList.empty()) {

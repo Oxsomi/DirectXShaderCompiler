@@ -41,6 +41,7 @@ const unsigned kDxilMajor = 1;
 /* <py::lines('VALRULE-TEXT')>hctdb_instrhelp.get_dxil_version_minor()</py>*/
 // VALRULE-TEXT:BEGIN
 const unsigned kDxilMinor = 10;
+const unsigned kDxilReleasedMinor = 9;
 // VALRULE-TEXT:END
 
 inline unsigned MakeDxilVersion(unsigned DxilMajor, unsigned DxilMinor) {
@@ -69,6 +70,11 @@ inline int CompareVersions(unsigned Major1, unsigned Minor1, unsigned Major2,
   if (Minor1 > Minor2)
     return 1;
   return 0;
+}
+
+// Use this instead of fixed version checks to enable experimental features.
+inline bool IsVersionExperimental(unsigned Major, unsigned Minor) {
+  return CompareVersions(Major, Minor, kDxilMajor, kDxilReleasedMinor) > 0;
 }
 
 // Utility for updating major,minor to max of current and new.
@@ -160,6 +166,10 @@ const unsigned kMinWaveSize = 4;
 const unsigned kMaxWaveSize = 128;
 const unsigned kDefaultMaxVectorLength = 4;
 const unsigned kSM69MaxVectorLength = 1024;
+const unsigned kLinAlgMatrixMaxK = 128;
+const unsigned kLinAlgMatrixMinK = 4;
+const unsigned kLinAlgThreadGroupMatrixMaxK = 1024;
+const unsigned kLinAlgThreadGroupMatrixMinK = 1;
 
 const float kMaxMipLodBias = 15.99f;
 const float kMinMipLodBias = -16.0f;
@@ -194,13 +204,34 @@ enum class ComponentType : uint32_t {
   PackedU8x32 = 18,
 
   // BEGIN NEW FOR SM 6.9
-  U8 = 19,
-  I8 = 20,
-  F8_E4M3 = 21,
+  I8 = 19,
+  U8 = 20,
+  F8_E4M3FN = 21,
   F8_E5M2 = 22,
   // END
 
   LastEntry
+};
+
+enum class MatrixUse : uint32_t {
+  A = 0,
+  B = 1,
+  Accumulator = 2,
+};
+
+enum class MatrixScope : uint32_t {
+  Thread = 0,
+  Wave = 1,
+  ThreadGroup = 2,
+};
+
+enum class MatrixLayout : uint32_t {
+  RowMajor = 0,
+  ColumnMajor = 1,
+  MulOptimal = 2,
+  MulOptimalTranspose = 3,
+  OuterProductOptimal = 4,
+  OuterProductOptimalTranspose = 5,
 };
 
 // Must match D3D_INTERPOLATION_MODE
@@ -523,13 +554,11 @@ static const OpCodeTableID TableID = OpCodeTableID::ExperimentalOps;
 // Enumeration for ExperimentalOps DXIL operations
 enum class OpCode : unsigned {
   //
-  LinAlgMatrixReserved0 = 30, // reserved
-  LinAlgMatrixReserved1 = 31, // reserved
-  LinAlgMatrixReserved2 = 32, // reserved
+  ReservedE0 = 32, // reserved
 
   // Debugging
-  DebugBreak = 33,        // triggers a breakpoint if a debugger is attached
-  IsDebuggerPresent = 34, // returns true if a debugger is attached
+  DebugBreak = 33,         // triggers a breakpoint if debugging is enabled
+  IsDebuggingEnabled = 34, // returns true if debugging is enabled
 
   // Group Wave Ops
   GetGroupWaveCount = 2, // returns the number of waves in the thread group
@@ -544,41 +573,52 @@ enum class OpCode : unsigned {
       9, // returns committed triangle vertices in object space as <9 x float>
 
   // Linear Algebra Operations
-  CopyConvertMatrix =
+  LinAlgConvert =
+      30, // Convert vector components from one interpretation to another
+  LinAlgCopyConvertMatrix =
       13, // Converts and copies the element and use type of the source matrix
           // to the destination matrix with optional transpose
-  CreateMatrix = 11,     // creates a handle to a Matrix
-  FillMatrix = 12,       // fills a matrix with a scalar value
-  MatrixAccumulate = 24, // accumulate A or B matrix into Accumulator matrix
-                         // following LHS += RHS
-  MatrixAccumulateToDescriptor =
+  LinAlgFillMatrix = 12, // fills a matrix with a scalar value
+  LinAlgMatVecMul =
+      25, // Multiplies a MxK dimension matrix and a K sized input vector
+  LinAlgMatVecMulAdd = 26, // Multiplies a MxK dimension matrix and a K sized
+                           // input vector then adds a M sized bias vector
+  LinAlgMatrixAccumulate = 24, // accumulate A or B matrix into Accumulator
+                               // matrix following LHS += RHS
+  LinAlgMatrixAccumulateToDescriptor =
       27, // accumulates a matrix to a RWByteAddressBuffer
-  MatrixAccumulateToMemory = 28, // accumulates a matrix to groupshared memory
-  MatrixGetCoordinate =
+  LinAlgMatrixAccumulateToMemory =
+      28, // accumulates a matrix to groupshared memory
+  LinAlgMatrixGetCoordinate =
       17, // returns a two element vector containing the column and row of the
           // matrix that the thread-local index corresponds to
-  MatrixGetElement = 18, // returns the element of the matrix corresponding to
-                         // the provided thread-local index
-  MatrixLength = 16, // returns the number of elements stored in thread-local
-                     // storage on the active thread for the provided matrix
-  MatrixLoadFromDescriptor =
+  LinAlgMatrixGetElement =
+      18, // returns the element of the matrix corresponding to the provided
+          // thread-local index
+  LinAlgMatrixLength =
+      16, // returns the number of elements stored in thread-local storage on
+          // the active thread for the provided matrix
+  LinAlgMatrixLoadFromDescriptor =
       14, // fills a matrix with data from a [RW]ByteAddressBuffer
-  MatrixLoadFromMemory =
+  LinAlgMatrixLoadFromMemory =
       15, // fills a matrix with data from a groupshared array
-  MatrixMulOp =
-      23, // applies a multiplication op to matrix C using A and B as parameters
-  MatrixOuterProduct = 29, // Outer products an M sized vector and a K sized
-                           // vector producing an MxK matrix
-  MatrixQueryAccumulatorLayout = 22, // returns comptime 0 when accumulator
-                                     // matrix are A layout, 1 when B layout
-  MatrixSetElement = 19, // sets the element of the matrix corresponding to the
-                         // provided thread-local index
-  MatrixStoreToDescriptor = 20, // stores a matrix to a RWByteAddressBuffer
-  MatrixStoreToMemory = 21,     // stores a matrix to groupshared memory
-  MatrixVecMul =
-      25, // Multiplies a MxK dimension matrix and a K sized input vector
-  MatrixVecMulAdd = 26, // Multiplies a MxK dimension matrix and a K sized input
-                        // vector then adds a M sized bias vector
+  LinAlgMatrixMultiply =
+      23, // Returns the resulting matrix from multiplying A and B
+  LinAlgMatrixMultiplyAccumulate =
+      11, // Returns the resulting matrix from multiplying A and B and
+          // accumulating into C
+  LinAlgMatrixOuterProduct = 29, // Outer products an M sized vector and a N
+                                 // sized vector producing an MxN matrix
+  LinAlgMatrixQueryAccumulatorLayout =
+      22, // returns comptime 0 when accumulator matrix are A layout, 1 when B
+          // layout
+  LinAlgMatrixSetElement = 19, // sets the element of the matrix corresponding
+                               // to the provided thread-local index
+  LinAlgMatrixStoreToDescriptor =
+      20,                         // stores a matrix to a RWByteAddressBuffer
+  LinAlgMatrixStoreToMemory = 21, // stores a matrix to groupshared memory
+  LinAlgVectorAccumulateToDescriptor =
+      31, // Accumulates given vector to the buffer at the given offset
 
   // No-op
   ExperimentalNop = 0, // nop does nothing
@@ -639,6 +679,10 @@ enum class OpCode : unsigned {
   ReservedC7 = 300,  // reserved
   ReservedC8 = 301,  // reserved
   ReservedC9 = 302,  // reserved
+  ReservedD0 = 305,  // reserved
+  ReservedD1 = 306,  // reserved
+  ReservedD2 = 307,  // reserved
+  ReservedD3 = 308,  // reserved
 
   // Amplification shader instructions
   DispatchMesh = 173, // Amplification shader intrinsic DispatchMesh
@@ -867,19 +911,6 @@ enum class OpCode : unsigned {
   // Library create handle from resource struct (like HL intrinsic)
   CreateHandleForLib =
       160, // create resource handle from resource struct for library
-
-  // Linear Algebra Operations
-  MatVecMul =
-      305, // Multiplies a MxK dimension matrix and a K sized input vector
-  MatVecMulAdd = 306, // multiplies a MxK dimension matrix and a K sized input
-                      // vector and adds an M-sized bias vector
-  OuterProductAccumulate =
-      307, // Computes the outer product between column vectors and an MxN
-           // matrix is accumulated component-wise atomically (with device
-           // scope) in memory
-  VectorAccumulate = 308, // Accumulates the components of a vector
-                          // component-wise atomically (with device scope) to
-                          // the corresponding elements of an array in memory
 
   // Mesh shader instructions
   EmitIndices = 169, // emit a primitive's vertex indices in a mesh shader
@@ -1257,94 +1288,108 @@ enum class OpCode : unsigned {
   EXP_OPCODE(ExperimentalOps,
              HitObject_TriangleObjectPosition), // returns triangle vertices in
                                                 // object space as <9 x float>
-  // CreateMatrix = 0x8000000B, 2147483659U, -2147483637
-  EXP_OPCODE(ExperimentalOps, CreateMatrix), // creates a handle to a Matrix
-  // FillMatrix = 0x8000000C, 2147483660U, -2147483636
-  EXP_OPCODE(ExperimentalOps, FillMatrix), // fills a matrix with a scalar value
-  // CopyConvertMatrix = 0x8000000D, 2147483661U, -2147483635
+  // LinAlgMatrixMultiplyAccumulate = 0x8000000B, 2147483659U, -2147483637
   EXP_OPCODE(ExperimentalOps,
-             CopyConvertMatrix), // Converts and copies the element and use type
-                                 // of the source matrix to the destination
-                                 // matrix with optional transpose
-  // MatrixLoadFromDescriptor = 0x8000000E, 2147483662U, -2147483634
+             LinAlgMatrixMultiplyAccumulate), // Returns the resulting matrix
+                                              // from multiplying A and B and
+                                              // accumulating into C
+  // LinAlgFillMatrix = 0x8000000C, 2147483660U, -2147483636
   EXP_OPCODE(ExperimentalOps,
-             MatrixLoadFromDescriptor), // fills a matrix with data from a
-                                        // [RW]ByteAddressBuffer
-  // MatrixLoadFromMemory = 0x8000000F, 2147483663U, -2147483633
-  EXP_OPCODE(ExperimentalOps, MatrixLoadFromMemory), // fills a matrix with data
-                                                     // from a groupshared array
-  // MatrixLength = 0x80000010, 2147483664U, -2147483632
+             LinAlgFillMatrix), // fills a matrix with a scalar value
+  // LinAlgCopyConvertMatrix = 0x8000000D, 2147483661U, -2147483635
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixLength), // returns the number of elements stored in thread-local
-                     // storage on the active thread for the provided matrix
-  // MatrixGetCoordinate = 0x80000011, 2147483665U, -2147483631
+      LinAlgCopyConvertMatrix), // Converts and copies the element and use type
+                                // of the source matrix to the destination
+                                // matrix with optional transpose
+  // LinAlgMatrixLoadFromDescriptor = 0x8000000E, 2147483662U, -2147483634
   EXP_OPCODE(ExperimentalOps,
-             MatrixGetCoordinate), // returns a two element vector containing
-                                   // the column and row of the matrix that the
-                                   // thread-local index corresponds to
-  // MatrixGetElement = 0x80000012, 2147483666U, -2147483630
+             LinAlgMatrixLoadFromDescriptor), // fills a matrix with data from a
+                                              // [RW]ByteAddressBuffer
+  // LinAlgMatrixLoadFromMemory = 0x8000000F, 2147483663U, -2147483633
+  EXP_OPCODE(ExperimentalOps,
+             LinAlgMatrixLoadFromMemory), // fills a matrix with data from a
+                                          // groupshared array
+  // LinAlgMatrixLength = 0x80000010, 2147483664U, -2147483632
+  EXP_OPCODE(ExperimentalOps,
+             LinAlgMatrixLength), // returns the number of elements stored in
+                                  // thread-local storage on the active thread
+                                  // for the provided matrix
+  // LinAlgMatrixGetCoordinate = 0x80000011, 2147483665U, -2147483631
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixGetElement), // returns the element of the matrix corresponding to
-                         // the provided thread-local index
-  // MatrixSetElement = 0x80000013, 2147483667U, -2147483629
+      LinAlgMatrixGetCoordinate), // returns a two element vector containing the
+                                  // column and row of the matrix that the
+                                  // thread-local index corresponds to
+  // LinAlgMatrixGetElement = 0x80000012, 2147483666U, -2147483630
   EXP_OPCODE(ExperimentalOps,
-             MatrixSetElement), // sets the element of the matrix corresponding
-                                // to the provided thread-local index
-  // MatrixStoreToDescriptor = 0x80000014, 2147483668U, -2147483628
+             LinAlgMatrixGetElement), // returns the element of the matrix
+                                      // corresponding to the provided
+                                      // thread-local index
+  // LinAlgMatrixSetElement = 0x80000013, 2147483667U, -2147483629
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixStoreToDescriptor), // stores a matrix to a RWByteAddressBuffer
-  // MatrixStoreToMemory = 0x80000015, 2147483669U, -2147483627
+      LinAlgMatrixSetElement), // sets the element of the matrix corresponding
+                               // to the provided thread-local index
+  // LinAlgMatrixStoreToDescriptor = 0x80000014, 2147483668U, -2147483628
   EXP_OPCODE(ExperimentalOps,
-             MatrixStoreToMemory), // stores a matrix to groupshared memory
-  // MatrixQueryAccumulatorLayout = 0x80000016, 2147483670U, -2147483626
+             LinAlgMatrixStoreToDescriptor), // stores a matrix to a
+                                             // RWByteAddressBuffer
+  // LinAlgMatrixStoreToMemory = 0x80000015, 2147483669U, -2147483627
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixQueryAccumulatorLayout), // returns comptime 0 when accumulator
-                                     // matrix are A layout, 1 when B layout
-  // MatrixMulOp = 0x80000017, 2147483671U, -2147483625
+      LinAlgMatrixStoreToMemory), // stores a matrix to groupshared memory
+  // LinAlgMatrixQueryAccumulatorLayout = 0x80000016, 2147483670U, -2147483626
   EXP_OPCODE(ExperimentalOps,
-             MatrixMulOp), // applies a multiplication op to matrix C using A
-                           // and B as parameters
-  // MatrixAccumulate = 0x80000018, 2147483672U, -2147483624
+             LinAlgMatrixQueryAccumulatorLayout), // returns comptime 0 when
+                                                  // accumulator matrix are A
+                                                  // layout, 1 when B layout
+  // LinAlgMatrixMultiply = 0x80000017, 2147483671U, -2147483625
   EXP_OPCODE(ExperimentalOps,
-             MatrixAccumulate), // accumulate A or B matrix into Accumulator
-                                // matrix following LHS += RHS
-  // MatrixVecMul = 0x80000019, 2147483673U, -2147483623
+             LinAlgMatrixMultiply), // Returns the resulting matrix from
+                                    // multiplying A and B
+  // LinAlgMatrixAccumulate = 0x80000018, 2147483672U, -2147483624
   EXP_OPCODE(ExperimentalOps,
-             MatrixVecMul), // Multiplies a MxK dimension matrix and a K sized
-                            // input vector
-  // MatrixVecMulAdd = 0x8000001A, 2147483674U, -2147483622
+             LinAlgMatrixAccumulate), // accumulate A or B matrix into
+                                      // Accumulator matrix following LHS += RHS
+  // LinAlgMatVecMul = 0x80000019, 2147483673U, -2147483623
+  EXP_OPCODE(ExperimentalOps,
+             LinAlgMatVecMul), // Multiplies a MxK dimension matrix and a K
+                               // sized input vector
+  // LinAlgMatVecMulAdd = 0x8000001A, 2147483674U, -2147483622
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixVecMulAdd), // Multiplies a MxK dimension matrix and a K sized input
-                        // vector then adds a M sized bias vector
-  // MatrixAccumulateToDescriptor = 0x8000001B, 2147483675U, -2147483621
+      LinAlgMatVecMulAdd), // Multiplies a MxK dimension matrix and a K sized
+                           // input vector then adds a M sized bias vector
+  // LinAlgMatrixAccumulateToDescriptor = 0x8000001B, 2147483675U, -2147483621
   EXP_OPCODE(ExperimentalOps,
-             MatrixAccumulateToDescriptor), // accumulates a matrix to a
-                                            // RWByteAddressBuffer
-  // MatrixAccumulateToMemory = 0x8000001C, 2147483676U, -2147483620
+             LinAlgMatrixAccumulateToDescriptor), // accumulates a matrix to a
+                                                  // RWByteAddressBuffer
+  // LinAlgMatrixAccumulateToMemory = 0x8000001C, 2147483676U, -2147483620
+  EXP_OPCODE(ExperimentalOps,
+             LinAlgMatrixAccumulateToMemory), // accumulates a matrix to
+                                              // groupshared memory
+  // LinAlgMatrixOuterProduct = 0x8000001D, 2147483677U, -2147483619
   EXP_OPCODE(
       ExperimentalOps,
-      MatrixAccumulateToMemory), // accumulates a matrix to groupshared memory
-  // MatrixOuterProduct = 0x8000001D, 2147483677U, -2147483619
-  EXP_OPCODE(ExperimentalOps,
-             MatrixOuterProduct), // Outer products an M sized vector and a K
-                                  // sized vector producing an MxK matrix
-  // LinAlgMatrixReserved0 = 0x8000001E, 2147483678U, -2147483618
-  EXP_OPCODE(ExperimentalOps, LinAlgMatrixReserved0), // reserved
-  // LinAlgMatrixReserved1 = 0x8000001F, 2147483679U, -2147483617
-  EXP_OPCODE(ExperimentalOps, LinAlgMatrixReserved1), // reserved
-  // LinAlgMatrixReserved2 = 0x80000020, 2147483680U, -2147483616
-  EXP_OPCODE(ExperimentalOps, LinAlgMatrixReserved2), // reserved
+      LinAlgMatrixOuterProduct), // Outer products an M sized vector and a N
+                                 // sized vector producing an MxN matrix
+  // LinAlgConvert = 0x8000001E, 2147483678U, -2147483618
+  EXP_OPCODE(ExperimentalOps, LinAlgConvert), // Convert vector components from
+                                              // one interpretation to another
+  // LinAlgVectorAccumulateToDescriptor = 0x8000001F, 2147483679U, -2147483617
+  EXP_OPCODE(
+      ExperimentalOps,
+      LinAlgVectorAccumulateToDescriptor), // Accumulates given vector to the
+                                           // buffer at the given offset
+  // ReservedE0 = 0x80000020, 2147483680U, -2147483616
+  EXP_OPCODE(ExperimentalOps, ReservedE0), // reserved
   // DebugBreak = 0x80000021, 2147483681U, -2147483615
   EXP_OPCODE(ExperimentalOps,
-             DebugBreak), // triggers a breakpoint if a debugger is attached
-  // IsDebuggerPresent = 0x80000022, 2147483682U, -2147483614
+             DebugBreak), // triggers a breakpoint if debugging is enabled
+  // IsDebuggingEnabled = 0x80000022, 2147483682U, -2147483614
   EXP_OPCODE(ExperimentalOps,
-             IsDebuggerPresent), // returns true if a debugger is attached
+             IsDebuggingEnabled), // returns true if debugging is enabled
 };
 // OPCODE-ENUM:END
 #undef EXP_OPCODE
@@ -1409,7 +1454,7 @@ enum class OpCodeClass : unsigned {
 
   // Debugging
   DebugBreak,
-  IsDebuggerPresent,
+  IsDebuggingEnabled,
 
   // Derivatives
   CalculateLOD,
@@ -1504,29 +1549,27 @@ enum class OpCodeClass : unsigned {
   CreateHandleForLib,
 
   // Linear Algebra Operations
-  CopyConvertMatrix,
-  CreateMatrix,
-  FillMatrix,
-  MatVecMul,
-  MatVecMulAdd,
-  MatrixAccumulate,
-  MatrixAccumulateToDescriptor,
-  MatrixAccumulateToMemory,
-  MatrixGetCoordinate,
-  MatrixGetElement,
-  MatrixLength,
-  MatrixLoadFromDescriptor,
-  MatrixLoadFromMemory,
-  MatrixMulOp,
-  MatrixOuterProduct,
-  MatrixQueryAccumulatorLayout,
-  MatrixSetElement,
-  MatrixStoreToDescriptor,
-  MatrixStoreToMemory,
-  MatrixVecMul,
-  MatrixVecMulAdd,
-  OuterProductAccumulate,
-  VectorAccumulate,
+  LinAlgConvert,
+  LinAlgCopyConvertMatrix,
+  LinAlgFillMatrix,
+  LinAlgMatVecMul,
+  LinAlgMatVecMulAdd,
+  LinAlgMatrixAccumulate,
+  LinAlgMatrixAccumulateToDescriptor,
+  LinAlgMatrixAccumulateToMemory,
+  LinAlgMatrixGetCoordinate,
+  LinAlgMatrixGetElement,
+  LinAlgMatrixLength,
+  LinAlgMatrixLoadFromDescriptor,
+  LinAlgMatrixLoadFromMemory,
+  LinAlgMatrixMultiply,
+  LinAlgMatrixMultiplyAccumulate,
+  LinAlgMatrixOuterProduct,
+  LinAlgMatrixQueryAccumulatorLayout,
+  LinAlgMatrixSetElement,
+  LinAlgMatrixStoreToDescriptor,
+  LinAlgMatrixStoreToMemory,
+  LinAlgVectorAccumulateToDescriptor,
 
   // Mesh shader instructions
   EmitIndices,
@@ -1713,7 +1756,7 @@ enum class OpCodeClass : unsigned {
   NodeOutputIsValid,
   OutputComplete,
 
-  NumOpClasses = 225, // exclusive last value of enumeration
+  NumOpClasses = 223, // exclusive last value of enumeration
 };
 // OPCODECLASS-ENUM:END
 
@@ -1892,29 +1935,6 @@ const unsigned kHitObjectMakeMiss_NumOp = 11;
 const unsigned kHitObjectTraceRay_RayDescOpIdx = 7;
 const unsigned kHitObjectTraceRay_PayloadOpIdx = 15;
 const unsigned kHitObjectTraceRay_NumOp = 16;
-
-// MatVec Ops
-const unsigned kMatVecMulInputVectorIdx = 1;
-const unsigned kMatVecMulIsInputUnsignedIdx = 2;
-const unsigned kMatVecMulInputInterpretationIdx = 3;
-const unsigned kMatVecMulMatrixBufferIdx = 4;
-const unsigned kMatVecMulMatrixOffsetIdx = 5;
-const unsigned kMatVecMulMatrixInterpretationIdx = 6;
-const unsigned kMatVecMulMatrixMIdx = 7;
-const unsigned kMatVecMulMatrixKIdx = 8;
-const unsigned kMatVecMulMatrixLayoutIdx = 9;
-const unsigned kMatVecMulMatrixTransposeIdx = 10;
-const unsigned kMatVecMulMatrixStrideIdx = 11;
-const unsigned kMatVecMulIsOutputUnsignedIdx = 12;
-
-// MatVecAdd
-const unsigned kMatVecMulAddBiasInterpretation = 14;
-const unsigned kMatVecMulAddIsOutputUnsignedIdx = 15;
-
-// Outer Product Accumulate
-const unsigned kOuterProdAccMatrixInterpretation = 5;
-const unsigned kOuterProdAccMatrixLayout = 6;
-const unsigned kOuterProdAccMatrixStride = 7;
 
 // TODO: add operand index for all the OpCodeClass.
 } // namespace OperandIndex
@@ -2482,17 +2502,11 @@ extern const char *kDxBreakFuncName;
 extern const char *kDxBreakCondName;
 extern const char *kDxBreakMDName;
 extern const char *kDxIsHelperGlobalName;
+extern const char *kDxLinAlgMatrixTypePrefix;
 
 extern const char *kHostLayoutTypePrefix;
 
 extern const char *kWaveOpsIncludeHelperLanesString;
-
-enum class LinalgMatrixLayout : uint32_t {
-  RowMajor = 0,
-  ColumnMajor = 1,
-  MulOptimal = 2,
-  OuterProductOptimal = 3,
-};
 
 } // namespace DXIL
 

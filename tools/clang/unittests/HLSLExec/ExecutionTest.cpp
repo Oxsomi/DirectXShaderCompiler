@@ -24,6 +24,7 @@
 #include <array>
 #include <string>
 #include <map>
+#include <set>
 #include <unordered_set>
 #include <sstream>
 #include <iomanip>
@@ -256,6 +257,14 @@ public:
   TEST_METHOD(WaveIntrinsicsInPSTest);
   TEST_METHOD(WaveSizeTest);
   TEST_METHOD(WaveSizeRangeTest);
+  // TODO(#8661): Remove me when GroupSharedLimit is available in a released
+  // Windows SDK.
+#if defined(D3D12_PREVIEW_SDK_VERSION)
+  TEST_METHOD(GroupSharedLimitTest);
+  TEST_METHOD(GroupSharedLimitASTest);
+  TEST_METHOD(GroupSharedLimitMSTest);
+#endif // defined(D3D12_PREVIEW_SDK_VERSION)
+  TEST_METHOD(GroupWaveIndexTest);
   TEST_METHOD(PartialDerivTest);
   TEST_METHOD(DerivativesTest);
   TEST_METHOD(ComputeSampleTest);
@@ -9781,8 +9790,8 @@ TEST_F(ExecutionTest, PackUnpackTest) {
     return;
   }
 #else
-  string args = "-enable-16bit-types";
-  string target = "cs_6_6";
+  std::string args = "-enable-16bit-types";
+  std::string target = "cs_6_6";
 
   if (!createDevice(&pDevice, D3D_SHADER_MODEL_6_6)) {
     return;
@@ -10253,7 +10262,7 @@ TEST_F(ExecutionTest, DynamicResourcesDynamicIndexingTest) {
   st::ParseShaderOpSetFromStream(pStream, ShaderOpSet.get());
   st::ShaderOp *pShaderOp =
       ShaderOpSet->GetShaderOp("DynamicResourcesDynamicIndexing");
-  vector<st::ShaderOpRootValue> fallbackRootValues = pShaderOp->RootValues;
+  std::vector<st::ShaderOpRootValue> fallbackRootValues = pShaderOp->RootValues;
 
   bool Skipped = true;
 
@@ -10664,6 +10673,525 @@ void ExecutionTest::WaveSizeRangeTest() {
 
   RunWaveSizeRangeTest(minWaveSize, maxWaveSize, ShaderOpSet, pDevice,
                        m_support);
+}
+
+// TODO(#8661): Remove me when GroupSharedLimit is available in a released
+// Windows SDK.
+#if defined(D3D12_PREVIEW_SDK_VERSION)
+// Helper: create a SM 6.10 device with HLK-aware skip/fail logic.
+// Returns true if device was created, false if skipped.
+static bool CreateGSMLimitTestDevice(D3D12SDKSelector *D3D12SDK,
+                                     CComPtr<ID3D12Device> &Device) {
+  bool FailIfRequirementsNotMet = false;
+#ifdef _HLK_CONF
+  FailIfRequirementsNotMet = true;
+#endif
+  WEX::TestExecution::RuntimeParameters::TryGetValue(
+      L"FailIfRequirementsNotMet", FailIfRequirementsNotMet);
+
+  const bool SkipUnsupported = !FailIfRequirementsNotMet;
+  if (!D3D12SDK->createDevice(&Device, D3D_SHADER_MODEL_6_10,
+                              SkipUnsupported)) {
+    if (FailIfRequirementsNotMet)
+      LogErrorFmt(L"Device creation failed, resulting in test failure, since "
+                  L"FailIfRequirementsNotMet is set.");
+    return false;
+  }
+  return true;
+}
+
+// Helper: run a GroupSharedLimit shader op test, read back UAV, and verify
+// that the output buffer contains sequential uint values [0, GsmDwords).
+static void RunGSMLimitShaderAndVerify(
+    ID3D12Device *Device, dxc::SpecificDllLoader &Support, LPCSTR OpName,
+    const char *ShaderText, UINT GsmDwords, UINT ShaderIndex,
+    std::shared_ptr<st::ShaderOpSet> ShaderOpSet) {
+  std::shared_ptr<st::ShaderOpTestResult> Test = st::RunShaderOpTestAfterParse(
+      Device, Support, OpName,
+      [&](LPCSTR Name, std::vector<BYTE> &Data, st::ShaderOp *Op) {
+        VERIFY_IS_TRUE((0 == strncmp(Name, "UAVBuffer0", 10)));
+        Op->Shaders.at(ShaderIndex).Text = ShaderText;
+        Data.resize(sizeof(uint32_t) * GsmDwords);
+        memset(Data.data(), 0, Data.size());
+      },
+      ShaderOpSet);
+
+  MappedData DataUav;
+  Test->Test->GetReadBackData("UAVBuffer0", &DataUav);
+  const uint32_t *OutData = (const uint32_t *)DataUav.data();
+
+  for (UINT I = 0; I < GsmDwords; I++) {
+    VERIFY_ARE_EQUAL(OutData[I], I);
+  }
+}
+
+void ExecutionTest::GroupSharedLimitTest() {
+  WEX::TestExecution::SetVerifyOutput VerifySettings(
+      WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
+
+  CComPtr<ID3D12Device> Device;
+  if (!CreateGSMLimitTestDevice(&*D3D12SDK, Device))
+    return;
+
+  const UINT MaxGSMCS = getMaxGroupSharedMemoryCS(Device);
+  LogCommentFmt(L"Device MaxGroupSharedMemoryPerGroupCS: %u bytes", MaxGSMCS);
+
+  // Read shader config
+  CComPtr<IStream> Stream;
+  std::shared_ptr<st::ShaderOpSet> ShaderOpSet =
+      std::make_shared<st::ShaderOpSet>();
+  readHlslDataIntoNewStream(L"ShaderOpArith.xml", &Stream, m_support);
+  st::ParseShaderOpSetFromStream(Stream, ShaderOpSet.get());
+
+  // Test 1: GroupSharedLimit that is >= usage should succeed.
+  // Use 4096 DWORDs (16384 bytes) of TGSM with a limit of 16384 bytes.
+  {
+    static const UINT GSM_DWORDS = 4096;
+
+    LogCommentFmt(L"Test 1: GroupSharedLimit == usage (16384 bytes). "
+                  L"Shader should compile and execute successfully.");
+
+    static const char Shader[] =
+        R"(
+      #define GSM_DWORDS 4096
+      #define NUM_THREADS 64
+      groupshared uint g_shared[GSM_DWORDS]; // 16384 bytes
+      RWStructuredBuffer<uint> g_output : register(u0);
+
+      [GroupSharedLimit(16384)]
+      [numthreads(NUM_THREADS, 1, 1)]
+      void main(uint GI : SV_GroupIndex) {
+        for (uint i = GI; i < GSM_DWORDS; i += NUM_THREADS)
+          g_shared[i] = i;
+        GroupMemoryBarrierWithGroupSync();
+        if (GI == 0) {
+          for (uint j = 0; j < GSM_DWORDS; j++)
+            g_output[j] = g_shared[j];
+        }
+      })";
+
+    RunGSMLimitShaderAndVerify(Device, m_support, "GroupSharedLimitTest",
+                               Shader, GSM_DWORDS, 0, ShaderOpSet);
+    LogCommentFmt(L"Test 1 passed: GroupSharedLimit == usage succeeded.");
+  }
+
+  // Test 2: GroupSharedLimit and usage are larger than the default.
+  // Use 9216 DWORDs (36864 bytes) of TGSM, which exceeds the default 32768,
+  // but set GroupSharedLimit to 36864 so it should succeed.
+  static const UINT GSM_BYTES_TEST2 = 36864;
+  if (MaxGSMCS < GSM_BYTES_TEST2) {
+    LogCommentFmt(L"Test 2 skipped: device max GSM (%u) < %u bytes", MaxGSMCS,
+                  GSM_BYTES_TEST2);
+  } else {
+    static const UINT GSM_DWORDS = GSM_BYTES_TEST2 / sizeof(uint32_t);
+
+    LogCommentFmt(L"Test 2: GroupSharedLimit (%u) and usage (%u bytes), "
+                  L"both above default (32768). "
+                  L"Shader should compile and execute successfully.",
+                  GSM_BYTES_TEST2, GSM_BYTES_TEST2);
+
+    static const char Shader[] =
+        R"(
+      #define GSM_DWORDS 9216
+      #define NUM_THREADS 64
+      groupshared uint g_shared[GSM_DWORDS]; // 36864 bytes
+      RWStructuredBuffer<uint> g_output : register(u0);
+
+      [GroupSharedLimit(36864)]
+      [numthreads(NUM_THREADS, 1, 1)]
+      void main(uint GI : SV_GroupIndex) {
+        for (uint i = GI; i < GSM_DWORDS; i += NUM_THREADS)
+          g_shared[i] = i;
+        GroupMemoryBarrierWithGroupSync();
+        if (GI == 0) {
+          for (uint j = 0; j < GSM_DWORDS; j++)
+            g_output[j] = g_shared[j];
+        }
+      })";
+
+    RunGSMLimitShaderAndVerify(Device, m_support, "GroupSharedLimitTest",
+                               Shader, GSM_DWORDS, 0, ShaderOpSet);
+    LogCommentFmt(L"Test 2 passed: GroupSharedLimit > default succeeded.");
+  }
+
+  // Test 3: No GroupSharedLimit attribute, usage within default (32768 bytes).
+  // The shader should use default limit and succeed.
+  {
+    static const UINT GSM_DWORDS = 8192;
+
+    LogCommentFmt(L"Test 3: No GroupSharedLimit, usage (32768 bytes) <= "
+                  L"default limit. Shader should succeed.");
+
+    static const char Shader[] =
+        R"(
+      #define GSM_DWORDS 8192
+      #define NUM_THREADS 64
+      groupshared uint g_shared[GSM_DWORDS]; // 32768 bytes (default max)
+      RWStructuredBuffer<uint> g_output : register(u0);
+
+      [numthreads(NUM_THREADS, 1, 1)]
+      void main(uint GI : SV_GroupIndex) {
+        for (uint i = GI; i < GSM_DWORDS; i += NUM_THREADS)
+          g_shared[i] = i;
+        GroupMemoryBarrierWithGroupSync();
+        if (GI == 0) {
+          for (uint j = 0; j < GSM_DWORDS; j++)
+            g_output[j] = g_shared[j];
+        }
+      })";
+
+    RunGSMLimitShaderAndVerify(Device, m_support, "GroupSharedLimitTest",
+                               Shader, GSM_DWORDS, 0, ShaderOpSet);
+    LogCommentFmt(L"Test 3 passed: No attribute with default usage succeeded.");
+  }
+}
+
+void ExecutionTest::GroupSharedLimitASTest() {
+  WEX::TestExecution::SetVerifyOutput VerifySettings(
+      WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
+
+  CComPtr<ID3D12Device> Device;
+  if (!CreateGSMLimitTestDevice(&*D3D12SDK, Device))
+    return;
+
+  if (!doesDeviceSupportMeshShaders(Device)) {
+    LogCommentFmt(L"Device does not support mesh shaders, skipping.");
+    WEX::Logging::Log::Result(WEX::Logging::TestResults::Skipped);
+    return;
+  }
+
+  const UINT MaxGSMAS = getMaxGroupSharedMemoryAS(Device);
+  LogCommentFmt(L"Device MaxGroupSharedMemoryPerGroupAS: %u bytes", MaxGSMAS);
+
+  CComPtr<IStream> Stream;
+  std::shared_ptr<st::ShaderOpSet> ShaderOpSet =
+      std::make_shared<st::ShaderOpSet>();
+  readHlslDataIntoNewStream(L"ShaderOpArith.xml", &Stream, m_support);
+  st::ParseShaderOpSetFromStream(Stream, ShaderOpSet.get());
+
+  // Test: AS shader fills groupshared memory and writes to UAV.
+  {
+    static const UINT GSM_DWORDS = 4096;
+
+    LogCommentFmt(L"AS Test: GroupSharedLimit == usage (16384 bytes). "
+                  L"Amplification shader should compile and execute.");
+
+    static const char Shader[] =
+        R"(
+      struct Payload { uint dummy; };
+
+      #define GSM_DWORDS 4096
+      groupshared uint g_shared[GSM_DWORDS]; // 16384 bytes
+      RWStructuredBuffer<uint> g_output : register(u0);
+
+      [GroupSharedLimit(16384)]
+      [numthreads(64, 1, 1)]
+      void ASMain(uint GI : SV_GroupIndex) {
+        for (uint i = GI; i < GSM_DWORDS; i += 64)
+          g_shared[i] = i;
+        GroupMemoryBarrierWithGroupSync();
+        if (GI == 0) {
+          for (uint j = 0; j < GSM_DWORDS; j++)
+            g_output[j] = g_shared[j];
+        }
+        Payload payload;
+        payload.dummy = 0;
+        DispatchMesh(1, 1, 1, payload);
+      }
+
+      struct MeshOutput {
+        float4 pos : SV_Position;
+      };
+
+      [OutputTopology("triangle")]
+      [numthreads(1, 1, 1)]
+      void MSMain(in payload Payload p,
+                  out vertices MeshOutput verts[3],
+                  out indices uint3 tris[1]) {
+        SetMeshOutputCounts(0, 0);
+        verts[0].pos = float4(0, 0, 0, 0);
+      }
+
+      float4 PSMain() : SV_Target { return float4(0,0,0,0); }
+      )";
+
+    RunGSMLimitShaderAndVerify(Device, m_support, "GroupSharedLimitASTest",
+                               Shader, GSM_DWORDS, 0, ShaderOpSet);
+    LogCommentFmt(
+        L"AS Test passed: GroupSharedLimit in amplification shader succeeded.");
+  }
+}
+
+void ExecutionTest::GroupSharedLimitMSTest() {
+  WEX::TestExecution::SetVerifyOutput VerifySettings(
+      WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
+
+  CComPtr<ID3D12Device> Device;
+  if (!CreateGSMLimitTestDevice(&*D3D12SDK, Device))
+    return;
+
+  if (!doesDeviceSupportMeshShaders(Device)) {
+    LogCommentFmt(L"Device does not support mesh shaders, skipping.");
+    WEX::Logging::Log::Result(WEX::Logging::TestResults::Skipped);
+    return;
+  }
+
+  const UINT MaxGSMMS = getMaxGroupSharedMemoryMS(Device);
+  LogCommentFmt(L"Device MaxGroupSharedMemoryPerGroupMS: %u bytes", MaxGSMMS);
+
+  CComPtr<IStream> Stream;
+  std::shared_ptr<st::ShaderOpSet> ShaderOpSet =
+      std::make_shared<st::ShaderOpSet>();
+  readHlslDataIntoNewStream(L"ShaderOpArith.xml", &Stream, m_support);
+  st::ParseShaderOpSetFromStream(Stream, ShaderOpSet.get());
+
+  // Test: MS shader fills groupshared memory and writes to UAV.
+  {
+    static const UINT GSM_DWORDS = 4096;
+
+    LogCommentFmt(L"MS Test: GroupSharedLimit == usage (16384 bytes). "
+                  L"Mesh shader should compile and execute.");
+
+    static const char Shader[] =
+        R"(
+      #define GSM_DWORDS 4096
+      groupshared uint g_shared[GSM_DWORDS]; // 16384 bytes
+      RWStructuredBuffer<uint> g_output : register(u0);
+
+      struct MeshOutput {
+        float4 pos : SV_Position;
+      };
+
+      [GroupSharedLimit(16384)]
+      [OutputTopology("triangle")]
+      [numthreads(64, 1, 1)]
+      void MSMain(uint GI : SV_GroupIndex,
+                  out vertices MeshOutput verts[3],
+                  out indices uint3 tris[1]) {
+        SetMeshOutputCounts(0, 0);
+        verts[0].pos = float4(0, 0, 0, 0);
+        for (uint i = GI; i < GSM_DWORDS; i += 64)
+          g_shared[i] = i;
+        GroupMemoryBarrierWithGroupSync();
+        if (GI == 0) {
+          for (uint j = 0; j < GSM_DWORDS; j++)
+            g_output[j] = g_shared[j];
+        }
+      }
+
+      float4 PSMain() : SV_Target { return float4(0,0,0,0); }
+      )";
+
+    RunGSMLimitShaderAndVerify(Device, m_support, "GroupSharedLimitMSTest",
+                               Shader, GSM_DWORDS, 0, ShaderOpSet);
+    LogCommentFmt(
+        L"MS Test passed: GroupSharedLimit in mesh shader succeeded.");
+  }
+}
+#endif // defined(D3D12_PREVIEW_SDK_VERSION)
+
+void ExecutionTest::GroupWaveIndexTest() {
+  WEX::TestExecution::SetVerifyOutput VerifySettings(
+      WEX::TestExecution::VerifyOutputSettings::LogOnlyFailures);
+
+  BEGIN_TEST_METHOD_PROPERTIES()
+  TEST_METHOD_PROPERTY(L"Kits.TestId", L"c3f60f00-8e91-4acb-b4be-9f483fbe836b")
+  TEST_METHOD_PROPERTY(
+      L"Kits.Specification",
+      L"Device.Graphics.D3D12.DXILCore.ShaderModel610.CoreRequirement")
+  END_TEST_METHOD_PROPERTIES()
+
+  bool FailIfRequirementsNotMet = false;
+#ifdef _HLK_CONF
+  FailIfRequirementsNotMet = true;
+#endif
+  WEX::TestExecution::RuntimeParameters::TryGetValue(
+      L"FailIfRequirementsNotMet", FailIfRequirementsNotMet);
+
+  CComPtr<ID3D12Device> Device;
+  const bool SkipUnsupported = !FailIfRequirementsNotMet;
+  if (!createDevice(&Device, D3D_SHADER_MODEL_6_10, SkipUnsupported)) {
+    if (FailIfRequirementsNotMet)
+      LogErrorFmt(L"Device creation failed, resulting in test failure, since "
+                  L"FailIfRequirementsNotMet is set.");
+    return;
+  }
+
+  // Get supported wave sizes for WaveSize attribute tests.
+  D3D12_FEATURE_DATA_D3D12_OPTIONS1 WaveOpts = {};
+  VERIFY_SUCCEEDED(
+      Device->CheckFeatureSupport((D3D12_FEATURE)D3D12_FEATURE_D3D12_OPTIONS1,
+                                  &WaveOpts, sizeof(WaveOpts)));
+  const UINT MinWaveSize = WaveOpts.WaveLaneCountMin;
+  const UINT MaxWaveSize = WaveOpts.WaveLaneCountMax;
+
+  struct GroupWaveData {
+    uint32_t GroupIndex;
+    uint32_t WaveIndex;
+    uint32_t WaveCount;
+    uint32_t LaneIndex;
+    uint32_t LaneCount;
+    uint32_t FirstLaneGroupIndex;
+  };
+
+  // Shader source uses defines for thread group dimensions and optional
+  // WaveSize attribute, injected via compiler -D options.
+  const char Shader[] =
+      R"(struct GroupWaveData {
+        uint GroupIndex;
+        uint WaveIndex;
+        uint WaveCount;
+        uint LaneIndex;
+        uint LaneCount;
+        uint FirstLaneGroupIndex;
+      };
+      RWStructuredBuffer<GroupWaveData> Data : register(u0);
+
+      WAVE_SIZE_ATTR
+      [numthreads(NUMTHREADS_X, NUMTHREADS_Y, NUMTHREADS_Z)]
+      void main(uint GI : SV_GroupIndex) {
+        GroupWaveData D;
+        D.GroupIndex = GI;
+        D.WaveIndex = GetGroupWaveIndex();
+        D.WaveCount = GetGroupWaveCount();
+        D.LaneIndex = WaveGetLaneIndex();
+        D.LaneCount = WaveGetLaneCount();
+        D.FirstLaneGroupIndex = WaveReadLaneFirst(GI);
+        Data[GI] = D;
+      })";
+
+  CComPtr<IStream> Stream;
+  std::shared_ptr<st::ShaderOpSet> ShaderOpSet =
+      std::make_shared<st::ShaderOpSet>();
+  readHlslDataIntoNewStream(L"ShaderOpArith.xml", &Stream, m_support);
+  st::ParseShaderOpSetFromStream(Stream, ShaderOpSet.get());
+
+  // Test configurations: {numthreadsX, numthreadsY, numthreadsZ, WaveSize}
+  // WaveSize 0 means no [WaveSize] attribute.
+  struct TestConfig {
+    UINT X, Y, Z;
+    UINT WaveSize;
+  };
+
+  std::vector<TestConfig> Configs = {
+      {8, 1, 1, 0},   // 1D small (8 threads)
+      {8, 8, 1, 0},   // 2D medium (64 threads)
+      {16, 16, 1, 0}, // 2D large (256 threads)
+      {32, 32, 1, 0}, // 2D max (1024 threads)
+      {4, 4, 4, 0},   // 3D (64 threads)
+      {10, 1, 1, 0},  // 1D non-power-of-2
+  };
+
+  // Add WaveSize-attributed variants for each supported wave size.
+  for (UINT WS = MinWaveSize; WS <= MaxWaveSize; WS *= 2) {
+    Configs.push_back({8, 8, 1, WS});
+    // Single wave case: numthreads <= WaveSize.
+    if (WS >= 8)
+      Configs.push_back({8, 1, 1, WS});
+  }
+
+  for (const auto &Cfg : Configs) {
+    const UINT NumThreads = Cfg.X * Cfg.Y * Cfg.Z;
+    if (Cfg.WaveSize > 0) {
+      LogCommentFmt(L"Testing [numthreads(%u,%u,%u)] [WaveSize(%u)] "
+                    L"(%u threads)",
+                    Cfg.X, Cfg.Y, Cfg.Z, Cfg.WaveSize, NumThreads);
+    } else {
+      LogCommentFmt(L"Testing [numthreads(%u,%u,%u)] (%u threads)", Cfg.X,
+                    Cfg.Y, Cfg.Z, NumThreads);
+    }
+
+    // Build compiler options with thread group defines.
+    char CompilerOptions[256];
+    if (Cfg.WaveSize > 0) {
+      VERIFY_IS_TRUE(
+          sprintf_s(CompilerOptions, sizeof(CompilerOptions),
+                    "-D NUMTHREADS_X=%u -D NUMTHREADS_Y=%u "
+                    "-D NUMTHREADS_Z=%u -D WAVE_SIZE_ATTR=[wavesize(%u)]",
+                    Cfg.X, Cfg.Y, Cfg.Z, Cfg.WaveSize) != -1);
+    } else {
+      VERIFY_IS_TRUE(sprintf_s(CompilerOptions, sizeof(CompilerOptions),
+                               "-D NUMTHREADS_X=%u -D NUMTHREADS_Y=%u "
+                               "-D NUMTHREADS_Z=%u -D WAVE_SIZE_ATTR=",
+                               Cfg.X, Cfg.Y, Cfg.Z) != -1);
+    }
+
+    std::shared_ptr<st::ShaderOpTestResult> Test =
+        st::RunShaderOpTestAfterParse(
+            Device, m_support, "GroupWaveIndexTest",
+            [&](LPCSTR Name, std::vector<BYTE> &Data, st::ShaderOp *ShaderOp) {
+              VERIFY_IS_TRUE(0 == strcmp(Name, "UAVBuffer0"));
+              ShaderOp->Shaders.at(0).Text = Shader;
+              ShaderOp->Shaders.at(0).Arguments = CompilerOptions;
+
+              VERIFY_IS_TRUE(sizeof(GroupWaveData) * NumThreads <= Data.size());
+              GroupWaveData *InData = (GroupWaveData *)Data.data();
+              memset(InData, 0, sizeof(GroupWaveData) * NumThreads);
+            },
+            ShaderOpSet);
+
+    MappedData DataUav;
+    Test->Test->GetReadBackData("UAVBuffer0", &DataUav);
+    VERIFY_IS_TRUE(sizeof(GroupWaveData) * NumThreads <= DataUav.size());
+    const GroupWaveData *Results = (const GroupWaveData *)DataUav.data();
+
+    // Verify WaveCount is uniform across all threads and >= 1.
+    const uint32_t GroupWaveCount = Results[0].WaveCount;
+    VERIFY_IS_GREATER_THAN_OR_EQUAL(GroupWaveCount, 1u);
+    for (UINT I = 0; I < NumThreads; ++I) {
+      VERIFY_ARE_EQUAL(Results[I].WaveCount, GroupWaveCount);
+    }
+
+    // Verify WaveCount >= ceil(threadGroupSize / LaneCount) per spec.
+    const uint32_t GroupLaneCount = Results[0].LaneCount;
+    const uint32_t MinWaves =
+        (NumThreads + GroupLaneCount - 1) / GroupLaneCount;
+    LogCommentFmt(L"  waveCount=%u, laneCount=%u, minWaves=%u", GroupWaveCount,
+                  GroupLaneCount, MinWaves);
+    VERIFY_IS_GREATER_THAN_OR_EQUAL(GroupWaveCount, MinWaves);
+
+    // If a specific WaveSize was requested, verify LaneCount matches.
+    if (Cfg.WaveSize > 0) {
+      VERIFY_ARE_EQUAL(GroupLaneCount, Cfg.WaveSize);
+    }
+
+    // Verify WaveIndex is in range [0, WaveCount).
+    for (UINT I = 0; I < NumThreads; ++I) {
+      VERIFY_IS_LESS_THAN(Results[I].WaveIndex, GroupWaveCount);
+    }
+
+    // Group threads by wave using FirstLaneGroupIndex.
+    std::map<uint32_t, std::vector<const GroupWaveData *>> Waves;
+    for (UINT I = 0; I < NumThreads; ++I) {
+      Waves[Results[I].FirstLaneGroupIndex].push_back(&Results[I]);
+    }
+
+    // Verify number of distinct waves matches WaveCount.
+    VERIFY_ARE_EQUAL(Waves.size(), static_cast<size_t>(GroupWaveCount));
+
+    // Verify WaveIndex is uniform within each wave and unique across waves.
+    std::set<uint32_t> SeenWaveIndices;
+    for (auto &WavePair : Waves) {
+      const std::vector<const GroupWaveData *> &Lanes = WavePair.second;
+      VERIFY_IS_GREATER_THAN_OR_EQUAL(Lanes.size(), 1u);
+
+      uint32_t ExpectedWaveIndex = Lanes[0]->WaveIndex;
+      for (size_t J = 1; J < Lanes.size(); ++J) {
+        VERIFY_ARE_EQUAL(Lanes[J]->WaveIndex, ExpectedWaveIndex);
+      }
+
+      VERIFY_IS_TRUE(SeenWaveIndices.find(ExpectedWaveIndex) ==
+                     SeenWaveIndices.end());
+      SeenWaveIndices.insert(ExpectedWaveIndex);
+    }
+
+    // Verify all wave indices from 0 to WaveCount-1 are present.
+    VERIFY_ARE_EQUAL(SeenWaveIndices.size(),
+                     static_cast<size_t>(GroupWaveCount));
+    for (uint32_t I = 0; I < GroupWaveCount; ++I) {
+      VERIFY_IS_TRUE(SeenWaveIndices.count(I) == 1);
+    }
+  }
 }
 
 // Atomic operation testing

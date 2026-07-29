@@ -333,7 +333,8 @@ const SpirvType *LowerTypeVisitor::lowerType(const SpirvType *type,
   else if (isa<VoidType>(type) || isa<ScalarType>(type) ||
            isa<MatrixType>(type) || isa<ImageType>(type) ||
            isa<SamplerType>(type) || isa<SampledImageType>(type) ||
-           isa<FunctionType>(type) || isa<StructType>(type)) {
+           isa<FunctionType>(type) || isa<StructType>(type) ||
+           isa<BufferEXTType>(type) || isa<UntypedPointerKHRType>(type)) {
     return type;
   }
   // Vectors could contain a hybrid type
@@ -849,6 +850,34 @@ const SpirvType *LowerTypeVisitor::lowerVkTypeInVkNamespace(
     assert(visitedTypeStack.size() == visitedTypeStackSize);
     return pointerType;
   }
+  if (name.startswith("SampledTexture")) {
+    const auto sampledType = hlsl::GetHLSLResourceResultType(type);
+    auto loweredType = lowerType(getElementType(astContext, sampledType), rule,
+                                 /*isRowMajor*/ llvm::None, srcLoc);
+
+    // Bool does not have a defined size in SPIR-V, so it cannot be
+    // used in the external interface.
+    if (loweredType == spvContext.getBoolType()) {
+      loweredType = spvContext.getUIntType(32);
+    }
+
+    constexpr size_t sampledTexturePrefixLength = sizeof("SampledTexture") - 1;
+    StringRef suffix = name.drop_front(sampledTexturePrefixLength);
+    const spv::Dim dimension =
+        suffix.startswith("1D")
+            ? spv::Dim::Dim1D
+            : (suffix.startswith("2D")
+                   ? spv::Dim::Dim2D
+                   : (suffix.startswith("3D") ? spv::Dim::Dim3D
+                                              : spv::Dim::Cube));
+    const bool isArray = suffix.endswith("Array");
+    const bool isMS = suffix.find("MS") != StringRef::npos;
+
+    const auto *imageType = spvContext.getImageType(
+        loweredType, dimension, ImageType::WithDepth::No, isArray, isMS,
+        ImageType::WithSampler::Yes, spv::ImageFormat::Unknown);
+    return spvContext.getSampledImageType(imageType);
+  }
   emitError("unknown type %0 in vk namespace", srcLoc) << type;
   return nullptr;
 }
@@ -892,7 +921,8 @@ LowerTypeVisitor::lowerResourceType(QualType type, SpirvLayoutRule rule,
       auto loweredType =
           lowerType(getElementType(astContext, sampledType), rule,
                     /*isRowMajor*/ llvm::None, srcLoc);
-      // Treat bool textures as uint for compatibility with OpTypeImage.
+      // Bool does not have a defined size in SPIR-V, so it cannot be
+      // used in the external interface.
       if (loweredType == spvContext.getBoolType()) {
         loweredType = spvContext.getUIntType(32);
       }

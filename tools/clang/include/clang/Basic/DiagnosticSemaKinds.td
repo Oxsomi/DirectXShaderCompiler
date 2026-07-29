@@ -1597,9 +1597,10 @@ def warn_hlsl_sometimes_uninit_out_param : Warning<
   "its declaration is reached|"
   "%3 is called}2">,
   InGroup<HLSLParameterUsage>;
-def warn_hlsl_groupshared_202x: Warning<
-  "Support for groupshared parameter annotation not added until HLSL 202x">,
-  InGroup<HLSLParameterUsage>;
+def warn_hlsl_groupshared_202x
+    : Warning<"Support for groupshared parameter annotation not added until "
+              "HLSL 202x">,
+      InGroup<HLSLGroupshared202x>;
 def warn_hlsl_groupshared_inout: Warning<
   "Passing groupshared variable to a parameter annotated with inout. See "
   "'groupshared' parameter annotation added in 202x.">,
@@ -6367,9 +6368,11 @@ def warn_side_effects_unevaluated_context : Warning<
 def warn_side_effects_typeid : Warning<
   "expression with side effects will be evaluated despite being used as an "
   "operand to 'typeid'">, InGroup<PotentiallyEvaluatedExpression>;
-def warn_unused_result : Warning<
-  "ignoring return value of function declared with warn_unused_result "
-  "attribute">, InGroup<DiagGroup<"unused-result">>;
+// HLSL Change Begin - allow attribute spelling to come in.
+def warn_unused_result
+    : Warning<"ignoring return value of function declared with %0 attribute">,
+      InGroup<DiagGroup<"unused-result">>;
+// HLSL Change End
 def warn_unused_volatile : Warning<
   "expression result unused; assign into a variable to force a volatile load">,
   InGroup<DiagGroup<"unused-volatile-lvalue">>;
@@ -7550,6 +7553,8 @@ def err_hlsl_matrix_member_zero_in_one_based: Error<
   "the digit '0' is used in '%0', but the syntax is for one-based rows and columns">;
 def err_hlsl_overloading_operator_disallowed: Error<
   "overloading %select{|non-member }1%0 is not allowed">;
+def err_hlsl_unsupported_conversion_operator: Error<
+  "conversion operator overloading is not allowed">;
 def err_hlsl_vector_member_bad_format: Error<
   "invalid format for vector swizzle '%0'">;
 def err_hlsl_vector_member_empty: Error<
@@ -7733,7 +7738,7 @@ def err_hlsl_norm_float_only : Error<
 def err_hlsl_unsupported_conditional_syntax : Error<
   "x ?: y conditional operator syntax not supported in HLSL">;
 def err_hlsl_conditional_cond_typecheck : Error<
-  "conditional operator only supports condition with scalar, vector, or matrix types convertable to bool.">;
+  "conditional operator only supports condition with scalar, vector, or matrix types convertible to bool.">;
 def err_hlsl_conditional_result_typecheck : Error<
   "conditional operator only supports results with numeric scalar, vector, or matrix types.">;
 def err_hlsl_conditional_dimensions : Error<
@@ -7952,7 +7957,7 @@ def err_hlsl_maxarraysize_template_arg : Error<
 def err_hlsl_maxrecord_attrs_on_same_arg : Error<
     "only one of MaxRecords or MaxRecordsSharedWith may be specified to the same parameter.">;
 def err_hlsl_maxrecordssharedwith_references_invalid_arg : Error<
-    "attribute MaxRecordsSharedWith must reference a valid ouput parameter name.">;
+    "attribute MaxRecordsSharedWith must reference a valid output parameter name.">;
 def err_hlsl_maxrecordssharedwith_references_itself : Error<
     "attribute MaxRecordsSharedWith must not reference the same parameter it is applied to.">;
 def err_hlsl_maxrecord_on_wrong_launch : Error<
@@ -8042,26 +8047,31 @@ def err_hlsl_linalg_matrix_dim_must_be_greater_than_zero: Error<
 def err_hlsl_linalg_matrix_layout_invalid : Error<
   "matrix layout %0 is not valid, must be in the range [%1, %2]">;
 
-def err_hlsl_linalg_mul_muladd_output_vector_size_not_equal_to_matrix_M : Error<
-  "output vector length must be equal to Matrix M dimension in a linalg Mul/MulAdd operation">;
-def err_hlsl_linalg_mul_muladd_unpacked_input_vector_size_not_equal_to_matrix_K : Error<
-  "unpacked input vector length must be equal to Matrix K dimension in a linalg Mul/MulAdd operation">;
-def err_hlsl_linalg_mul_muladd_packed_input_vector_size_incorrect : Error<
-  "packed input vector length must be the smallest number that can hold matrix dim K values of the "
-  "packed(smaller) type in linalg mul/muladd operations">;
-def err_hlsl_linalg_mul_muladd_isUnsigned_for_packed_input_must_be_true : Error<
-  "IsInputUnsigned must be true for packed input interpretations in linalg mul/muladd operations">;
-def err_hlsl_linalg_mul_muladd_packed_input_vector_must_be_uint : Error<
-  "packed input vector type must be a 32-bit unsigned int type in linalg mul/muladd operations">;
-def err_hlsl_linalg_mul_muladd_invalid_dim: Error<
-  "matrix dimension %select{M|K when using unpacked input vectors|K "
-  "when using packed input vectors}0 must be less than %1, in a linalg "
-  "Mul/MulAdd operation">;
+// SM 6.10 Linear Algebra Operations
+def err_hlsl_linalg_matrix_attribute_arg_not_int_or_enum
+    : Error<"argument is not an integer%select{| or enumeration}0">;
+def err_hlsl_linalg_matrix_attribute_arg_not_constant_value
+    : Error<"matrix attributes argument %1 is not a constant value">;
+def err_hlsl_linalg_matrix_invalid_enum_attribute_value
+    : Error<"matrix attribute %0 has invalid value %1, must be in the range "
+            "[%2, %3]">;
+def err_hlsl_linalg_matrix_attribute_on_invalid_type
+    : Error<"matrix attributes can only be applied to %0">;
+def err_hlsl_linalg_attributed_matrix_required
+    : Error<"argument must be linear algebra matrix type">;
 
-def err_hlsl_linalg_outer_prod_acc_vector_type_mismatch : Error<
-  "input vectors of outerproductaccumulate must have the same element type">;
-def err_hlsl_linalg_outer_prod_acc_matrix_layout_must_be_outer_prod_acc_optimal : Error<
-  "matrix layout for outerproductaccumulate must be %0">;
+def err_hlsl_linalg_unsupported_stage : Error<
+   "builtin unavailable in shader stage '%0' (requires 'compute', 'mesh' or 'amplification')">;
+
+def err_hlsl_pointers_unsupported : Error<
+  "%select{pointers|references}0 are unsupported in HLSL">;
+
+def err_hlsl_auto_descriptor_heap : Error<
+  "'auto' cannot deduce the type of '%select{ResourceDescriptorHeap|SamplerDescriptorHeap}0'; "
+  "use a specific resource or sampler type instead">;
+
+def err_hlsl_auto_undeducible_type : Error<
+  "'auto' cannot deduce type %0">;
 
 // HLSL Change Ends
 
