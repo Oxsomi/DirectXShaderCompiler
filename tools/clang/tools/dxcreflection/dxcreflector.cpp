@@ -1577,11 +1577,17 @@ HRESULT GetFromSource(DxcLangExtensionsHelper *pHelper, LPCSTR pFileName,
   HRESULT hr = GenerateAST(pHelper, pFileName, pRemap, pDefines, defineCount,
                            astHelper, opts, msfPtr, w);
 
-  if (FAILED(hr))
+  // Flush the diagnostics captured during AST generation into the warnings/errors string so callers actually
+  // see them on a failure path (the streams would otherwise only be flushed on the success path below).
+  if (FAILED(hr)) {
+    w.flush();
     return hr;
+  }
 
-  if (astHelper.bHasErrors)
+  if (astHelper.bHasErrors) {
+    w.flush();
     return E_FAIL;
+  }
 
   D3D12_HLSL_REFLECTION_FEATURE reflectMask =
       D3D12_HLSL_REFLECTION_FEATURE_NONE;
@@ -1612,8 +1618,10 @@ HRESULT GetFromSource(DxcLangExtensionsHelper *pHelper, LPCSTR pFileName,
   if (ReflectionError err = HLSLReflectionDataFromAST(
           refl, astHelper.compiler, *astHelper.tu, opts.AutoBindingSpace,
           reflectMask, opts.DefaultRowMajor)) {
-    fprintf(stderr, "HLSLReflectionDataFromAST failed %s\n",
-            err.toString().c_str());
+    // Route the reflection error into the error stream (not just stderr) so callers get a real message
+    // instead of an empty error blob + a failed status they can't diagnose.
+    w << "HLSLReflectionDataFromAST failed: " << err.toString().c_str() << "\n";
+    w.flush();
     return E_FAIL;
   }
 
