@@ -56,13 +56,11 @@
   #pragma clang diagnostic pop
 #endif
 
-#if _WIN32
 extern "C" const IID IID_IHLSLReflectionData = {
     0x7016f834,
     0xae85,
     0x4c86,
     {0xa4, 0x73, 0x8c, 0x2c, 0x98, 0x1d, 0xd3, 0x70}};
-#endif
 
 using namespace llvm;
 using namespace clang;
