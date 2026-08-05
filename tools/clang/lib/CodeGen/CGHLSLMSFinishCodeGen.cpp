@@ -2485,21 +2485,23 @@ void MarkUsedFunctionForConst(Value *V,
   }
 }
 
-bool CreateCBufferVariable(HLCBuffer &CB, HLModule &HLM, llvm::Type *HandleTy) {
-  bool bUsed = false;
+// Builds the cbuffer's struct type and its backing global, and records it as
+// the resource's symbol. Split out of CreateCBufferVariable because none of
+// this emits instructions: everything that creates handles or subscripts lives
+// in the per-function loop further down. That is what lets a cbuffer nothing
+// references reuse this and still contribute no code (see ConstructCBuffer).
+// cbTyOut and cbIndexDepthOut are only meaningful to that emission, so both are
+// optional.
+llvm::GlobalVariable *CreateCBufferGlobal(HLCBuffer &CB, HLModule &HLM,
+                                          llvm::Type **cbTyOut = nullptr,
+                                          unsigned *cbIndexDepthOut = nullptr) {
   // Build Struct for CBuffer.
   SmallVector<llvm::Type *, 4> Elements;
   for (const std::unique_ptr<DxilResourceBase> &C : CB.GetConstants()) {
-    Value *GV = C->GetGlobalSymbol();
-    if (!GV->use_empty())
-      bUsed = true;
     // Global variable must be pointer type.
     llvm::Type *Ty = C->GetHLSLType()->getPointerElementType();
     Elements.emplace_back(Ty);
   }
-  // Don't create CBuffer variable for unused cbuffer.
-  if (!bUsed)
-    return false;
 
   llvm::Module &M = *HLM.GetModule();
 
@@ -2555,6 +2557,35 @@ bool CreateCBufferVariable(HLCBuffer &CB, HLModule &HLM, llvm::Type *HandleTy) {
   }
 
   CB.SetGlobalSymbol(cbGV);
+
+  if (cbTyOut)
+    *cbTyOut = cbTy;
+
+  if (cbIndexDepthOut)
+    *cbIndexDepthOut = cbIndexDepth;
+
+  return cbGV;
+}
+
+bool CreateCBufferVariable(HLCBuffer &CB, HLModule &HLM, llvm::Type *HandleTy) {
+  bool bUsed = false;
+  for (const std::unique_ptr<DxilResourceBase> &C : CB.GetConstants()) {
+    if (!C->GetGlobalSymbol()->use_empty()) {
+      bUsed = true;
+      break;
+    }
+  }
+  // Don't create CBuffer variable for unused cbuffer.
+  if (!bUsed)
+    return false;
+
+  llvm::Module &M = *HLM.GetModule();
+
+  bool isCBArray = CB.IsArray();
+  llvm::Type *cbTy = nullptr;
+  unsigned cbIndexDepth = 0;
+  llvm::GlobalVariable *cbGV =
+      CreateCBufferGlobal(CB, HLM, &cbTy, &cbIndexDepth);
 
   llvm::Type *opcodeTy = llvm::Type::getInt32Ty(M.getContext());
   llvm::Type *idxTy = opcodeTy;
@@ -2759,6 +2790,24 @@ void ConstructCBuffer(
       bool bCreated = CreateCBufferVariable(CB, HLM, HandleTy);
       if (bCreated)
         ConstructCBufferAnnotation(CB, dxilTypeSys, AnnotationMap);
+
+      // KeepAll preserves an unused cbuffer's binding, so preserve its layout
+      // with it. The fake variable below is typed with the shared opaque
+      // CBufferType, which has no members and no annotation, so reflection
+      // reports Size but zero Variables and a host mirroring reflection into a
+      // descriptor layout ends up a register short of the SPIR-V side.
+      // Giving it the real struct type and annotation is free: this only
+      // creates a type and a global, and since the global has no users
+      // DxilLowerCreateHandleForLib replaces it with undef and erases it, so no
+      // instruction, binding or register allocation changes. The annotation
+      // reaches DFCC_ShaderStatistics only; StripReflection clears it from the
+      // DXIL part, and under Strip the whole thing is dropped as before.
+      else if (HLM.GetHLOptions().bUnusedResourceBinding ==
+               unsigned(UnusedResourceBinding::KeepAll)) {
+        CreateCBufferGlobal(CB, HLM);
+        ConstructCBufferAnnotation(CB, dxilTypeSys, AnnotationMap);
+      }
+
       else {
 
         // FIXME: Can we avoid creating a fake variable here, since this empty
