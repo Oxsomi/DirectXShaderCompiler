@@ -794,6 +794,9 @@ bool CapabilityVisitor::visit(SpirvExtInstImport *instr) {
              "NonSemantic.Shader.DebugInfo.100") {
     addExtension(Extension::KHR_non_semantic_info, "Shader.DebugInfo.100",
                  /*SourceLocation*/ {});
+  } else if (instr->getExtendedInstSetName() == "NonSemantic.DebugBreak") {
+    addExtension(Extension::KHR_non_semantic_info, "DebugBreak",
+                 /*SourceLocation*/ {});
   }
   return true;
 }
@@ -950,6 +953,12 @@ bool CapabilityVisitor::visit(SpirvModule *, Visitor::Phase phase) {
 
   addExtensionAndCapabilitiesIfEnabled(Extension::KHR_quad_control,
                                        {spv::Capability::QuadControlKHR});
+
+  if (spvOptions.useDescriptorHeap) {
+    addExtension(Extension::EXT_descriptor_heap, "DescriptorHeap", {});
+    addExtension(Extension::KHR_untyped_pointers, "DescriptorHeap", {});
+    addCapability(spv::Capability::DescriptorHeapEXT);
+  }
 
   return true;
 }

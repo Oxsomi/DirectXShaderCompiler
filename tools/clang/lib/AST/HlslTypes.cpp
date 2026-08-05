@@ -136,7 +136,8 @@ bool IsHLSLBuiltinRayAttributeStruct(clang::QualType QT) {
   if (const RecordType *RT = dyn_cast<RecordType>(Ty)) {
     const RecordDecl *RD = RT->getDecl();
     if (RD->getName() == "BuiltInTriangleIntersectionAttributes" ||
-        RD->getName() == "RayDesc")
+        RD->getName() == "RayDesc" ||
+        RD->getName() == "BuiltInTrianglePositions")
       return true;
   }
   return false;
@@ -291,6 +292,9 @@ bool HasHLSLReorderCoherent(clang::QualType type) {
   }
   return false;
 }
+
+/// Checks whether the pAttributes indicate a parameter is groupshared
+bool IsParamAttributedAsGroupShared(clang::AttributeList *pAttributes);
 
 /// Checks whether the pAttributes indicate a parameter is inout or out; if
 /// inout, pIsIn will be set to true.
@@ -540,18 +544,16 @@ bool IsHLSLNodeInputType(clang::QualType type) {
 }
 
 bool IsHLSLDynamicResourceType(clang::QualType type) {
-  if (const RecordType *RT = type->getAs<RecordType>()) {
-    StringRef name = RT->getDecl()->getName();
-    return name == ".Resource";
-  }
+  if (const HLSLDynamicResourceAttr *Attr =
+          getAttr<HLSLDynamicResourceAttr>(type))
+    return !Attr->getIsSampler();
   return false;
 }
 
 bool IsHLSLDynamicSamplerType(clang::QualType type) {
-  if (const RecordType *RT = type->getAs<RecordType>()) {
-    StringRef name = RT->getDecl()->getName();
-    return name == ".Sampler";
-  }
+  if (const HLSLDynamicResourceAttr *Attr =
+          getAttr<HLSLDynamicResourceAttr>(type))
+    return Attr->getIsSampler();
   return false;
 }
 
@@ -599,17 +601,6 @@ bool IsHLSLNodeOutputType(clang::QualType type) {
           (static_cast<uint32_t>(DXIL::NodeIOFlags::Output) |
            static_cast<uint32_t>(DXIL::NodeIOFlags::RecordGranularityMask))) ==
          static_cast<uint32_t>(DXIL::NodeIOFlags::Output);
-}
-
-bool IsHLSLNodeRecordArrayType(clang::QualType type) {
-  if (const RecordType *RT = type->getAs<RecordType>()) {
-    StringRef name = RT->getDecl()->getName();
-    if (name == "ThreadNodeOutputRecords" || name == "GroupNodeOutputRecords" ||
-        name == "GroupNodeInputRecords" || name == "RWGroupNodeInputRecords" ||
-        name == "EmptyNodeInput")
-      return true;
-  }
-  return false;
 }
 
 bool IsHLSLEmptyNodeRecordType(clang::QualType type) {
@@ -934,6 +925,15 @@ unsigned GetHLSLOutputPatchCount(QualType type) {
   return argList[1].getAsIntegral().getLimitedValue();
 }
 
+bool IsParamAttributedAsGroupShared(clang::AttributeList *pAttributes) {
+  while (pAttributes != nullptr) {
+    if (pAttributes->getKind() == AttributeList::AT_HLSLGroupShared)
+      return true;
+    pAttributes = pAttributes->getNext();
+  }
+  return false;
+}
+
 bool IsParamAttributedAsOut(clang::AttributeList *pAttributes, bool *pIsIn) {
   bool anyFound = false;
   bool inFound = false;
@@ -967,6 +967,8 @@ bool IsParamAttributedAsOut(clang::AttributeList *pAttributes, bool *pIsIn) {
 
 hlsl::ParameterModifier
 ParamModFromAttributeList(clang::AttributeList *pAttributes) {
+  if (IsParamAttributedAsGroupShared(pAttributes))
+    return ParameterModifier(hlsl::ParameterModifier::Kind::Ref);
   bool isIn, isOut;
   isOut = IsParamAttributedAsOut(pAttributes, &isIn);
   return ParameterModifier::FromInOut(isIn, isOut);

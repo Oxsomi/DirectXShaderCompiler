@@ -469,10 +469,7 @@ void ShaderOpTest::CreatePipelineState() {
     InitByteCode(&CDesc.CS, pCS);
     CHECK_HR(
         m_pDevice->CreateComputePipelineState(&CDesc, IID_PPV_ARGS(&m_pPSO)));
-  }
-  // Wakanda technology, needs vibranium to work
-#if defined(NTDDI_WIN10_VB) && WDK_NTDDI_VERSION >= NTDDI_WIN10_VB
-  else if (m_pShaderOp->MS) {
+  } else if (m_pShaderOp->MS) {
     // A couple types from a future version of d3dx12.h
     typedef CD3DX12_PIPELINE_STATE_STREAM_SUBOBJECT<
         D3D12_SHADER_BYTECODE, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS>
@@ -536,9 +533,7 @@ void ShaderOpTest::CreatePipelineState() {
     CHECK_HR(m_pDevice->QueryInterface(&pDevice2));
 
     CHECK_HR(pDevice2->CreatePipelineState(&PDesc, IID_PPV_ARGS(&m_pPSO)));
-  }
-#endif
-  else {
+  } else {
     CComPtr<ID3D10Blob> pVS, pDS, pHS, pGS, pPS;
     pPS = map_get_or_null(m_Shaders, m_pShaderOp->PS);
     pVS = map_get_or_null(m_Shaders, m_pShaderOp->VS);
@@ -933,6 +928,13 @@ void ShaderOpTest::GetReadBackData(LPCSTR pResourceName, MappedData *pData) {
   pData->reset(D.ReadBack, sizeInBytes);
 }
 
+void ShaderOpTest::GetResource(LPCSTR pResourceName,
+                               ID3D12Resource **ppResource) {
+  pResourceName = m_pShaderOp->Strings.insert(pResourceName); // Unique
+  ShaderOpResourceData &D = m_ResourceData.at(pResourceName);
+  *ppResource = D.Resource.p;
+}
+
 static void SetDescriptorHeaps(ID3D12GraphicsCommandList *pList,
                                std::vector<ID3D12DescriptorHeap *> &heaps) {
   if (heaps.empty())
@@ -956,6 +958,8 @@ void ShaderOpTest::RunCommandList() {
     SetRootValues(pList, m_pShaderOp->IsCompute());
     pList->Dispatch(m_pShaderOp->DispatchX, m_pShaderOp->DispatchY,
                     m_pShaderOp->DispatchZ);
+    if (m_PostDispatchCallbackFn)
+      m_PostDispatchCallbackFn(pList, this);
   } else {
     pList->SetPipelineState(m_pPSO);
     SetDescriptorHeaps(pList, m_DescriptorHeaps);
@@ -1002,7 +1006,6 @@ void ShaderOpTest::RunCommandList() {
     const float ClearColor[4] = {0.0f, 0.2f, 0.4f, 1.0f};
     pList->ClearRenderTargetView(rtvHandles[0], ClearColor, 0, nullptr);
 
-#if defined(NTDDI_WIN10_VB) && WDK_NTDDI_VERSION >= NTDDI_WIN10_VB
     if (m_pShaderOp->MS) {
 #ifndef NDEBUG
       D3D12_FEATURE_DATA_D3D12_OPTIONS7 O7;
@@ -1020,9 +1023,7 @@ void ShaderOpTest::RunCommandList() {
       pList6->ResolveQueryData(m_pQueryHeap,
                                D3D12_QUERY_TYPE_PIPELINE_STATISTICS, 0, 1,
                                m_pQueryBuffer, 0);
-    } else
-#endif
-    {
+    } else {
       // TODO: set all of this from m_pShaderOp.
       ShaderOpResourceData &VBufferData =
           this->m_ResourceData[m_pShaderOp->Strings.insert("VBuffer")];
@@ -1157,6 +1158,10 @@ void ShaderOpTest::SetInitCallback(TInitCallbackFn InitCallbackFn) {
 }
 void ShaderOpTest::SetShaderCallback(TShaderCallbackFn ShaderCallbackFn) {
   m_ShaderCallbackFn = ShaderCallbackFn;
+}
+void ShaderOpTest::SetPostDispatchCallback(
+    TCommandCallbackFn PostDispatchCallbackFn) {
+  m_PostDispatchCallbackFn = PostDispatchCallbackFn;
 }
 
 void ShaderOpTest::SetupRenderTarget(ShaderOp *pShaderOp, ID3D12Device *pDevice,
@@ -1712,6 +1717,7 @@ static const ParserEnumValue TEXTURE_ADDRESS_MODE_TABLE[] = {
 };
 
 static const ParserEnumValue COMPARISON_FUNC_TABLE[] = {
+    {L"NONE", D3D12_COMPARISON_FUNC_NONE},
     {L"NEVER", D3D12_COMPARISON_FUNC_NEVER},
     {L"LESS", D3D12_COMPARISON_FUNC_LESS},
     {L"EQUAL", D3D12_COMPARISON_FUNC_EQUAL},
@@ -2757,12 +2763,12 @@ bool ShaderOpParser::ReadAtElementName(IXmlReader *pReader, LPCWSTR pName) {
   }
 }
 
-std::shared_ptr<ShaderOpTestResult>
-RunShaderOpTestAfterParse(ID3D12Device *pDevice,
-                          dxc::SpecificDllLoader &support, LPCSTR pName,
-                          st::ShaderOpTest::TInitCallbackFn pInitCallback,
-                          st::ShaderOpTest::TShaderCallbackFn pShaderCallback,
-                          std::shared_ptr<st::ShaderOpSet> ShaderOpSet) {
+std::shared_ptr<ShaderOpTestResult> RunShaderOpTestAfterParse(
+    ID3D12Device *pDevice, dxc::SpecificDllLoader &support, LPCSTR pName,
+    st::ShaderOpTest::TInitCallbackFn pInitCallback,
+    st::ShaderOpTest::TShaderCallbackFn pShaderCallback,
+    st::ShaderOpTest::TCommandCallbackFn pPostDispatchCallback,
+    std::shared_ptr<st::ShaderOpSet> ShaderOpSet) {
   st::ShaderOp *pShaderOp;
   if (pName == nullptr) {
     if (ShaderOpSet->ShaderOps.size() != 1) {
@@ -2793,6 +2799,7 @@ RunShaderOpTestAfterParse(ID3D12Device *pDevice,
   test->SetSpecificDllLoader(&support);
   test->SetInitCallback(pInitCallback);
   test->SetShaderCallback(pShaderCallback);
+  test->SetPostDispatchCallback(pPostDispatchCallback);
   test->SetDevice(pDevice);
   test->RunShaderOp(pShaderOp);
 
@@ -2808,9 +2815,19 @@ std::shared_ptr<ShaderOpTestResult>
 RunShaderOpTestAfterParse(ID3D12Device *pDevice,
                           dxc::SpecificDllLoader &support, LPCSTR pName,
                           st::ShaderOpTest::TInitCallbackFn pInitCallback,
+                          st::ShaderOpTest::TShaderCallbackFn pShaderCallback,
                           std::shared_ptr<st::ShaderOpSet> ShaderOpSet) {
   return RunShaderOpTestAfterParse(pDevice, support, pName, pInitCallback,
-                                   nullptr, ShaderOpSet);
+                                   pShaderCallback, nullptr, ShaderOpSet);
+}
+
+std::shared_ptr<ShaderOpTestResult>
+RunShaderOpTestAfterParse(ID3D12Device *pDevice,
+                          dxc::SpecificDllLoader &support, LPCSTR pName,
+                          st::ShaderOpTest::TInitCallbackFn pInitCallback,
+                          std::shared_ptr<st::ShaderOpSet> ShaderOpSet) {
+  return RunShaderOpTestAfterParse(pDevice, support, pName, pInitCallback,
+                                   nullptr, nullptr, ShaderOpSet);
 }
 
 std::shared_ptr<ShaderOpTestResult>

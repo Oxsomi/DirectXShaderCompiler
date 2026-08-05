@@ -363,6 +363,8 @@ static std::string BufferTypeToString(D3D_CBUFFER_TYPE Type) {
 static std::string GetBuiltinTypeName(const ReflectionData &Refl,
                                       const ReflectionVariableType &Type) {
 
+  (void) Refl;
+
   std::string type = "";
 
   if (Type.GetClass() != D3D_SVC_STRUCT &&
@@ -453,6 +455,9 @@ static std::string GetBuiltinTypeName(const ReflectionData &Refl,
   case D3D_SVC_MATRIX_COLUMNS:
     type += std::to_string(Type.GetRows()) + "x" +
             std::to_string(Type.GetColumns());
+    break;
+
+  default:
     break;
   }
 
@@ -671,6 +676,8 @@ static void PrintRegister(JsonWriter &Json, const ReflectionData &Reflection,
   case D3D_SIT_BYTEADDRESS:
     printBufferId = false;
     break;
+  default:
+    break;
   }
 
   if (printBufferId && !Settings.HumanReadable)
@@ -888,7 +895,7 @@ static void PrintFunction(JsonWriter &Json, const ReflectionData &Reflection,
               ? Reflection.Strings[Reflection.NodeSymbols[nodeId].GetNameId()]
               : std::to_string(i);
 
-      Json.Object(paramName.c_str(), [&Reflection, &func, &Json, hasSymbols,
+      Json.Object(paramName.c_str(), [&Reflection, &Json, hasSymbols,
                                       &param, &node, &Settings, nodeId]() {
         if (hasSymbols && !Settings.HideFileInfo) {
 
@@ -917,7 +924,7 @@ static void PrintFunction(JsonWriter &Json, const ReflectionData &Reflection,
     const ReflectionFunctionParameter &param =
         Reflection.Parameters[node.GetLocalId()];
 
-    Json.Object("ReturnType", [&Reflection, &func, &Json, hasSymbols, &param,
+    Json.Object("ReturnType", [&Reflection, &Json, hasSymbols, &param,
                                &node, &Settings]() {
       PrintParameter(Reflection, param.TypeId, hasSymbols, Json,
                      node.GetSemanticId(), node.GetInterpolationMode(),
@@ -932,19 +939,19 @@ static void PrintValue(JsonWriter &Json, D3D12_HLSL_ENUM_TYPE type, uint64_t v,
   switch (type) {
 
   case D3D12_HLSL_ENUM_TYPE_INT:
-    Json.IntField("Value", int32_t(uint32_t(v)));
+    Json.IntField(Name, int32_t(uint32_t(v)));
     break;
 
   case D3D12_HLSL_ENUM_TYPE_INT64_T:
-    Json.IntField("Value", int64_t(v));
+    Json.IntField(Name, int64_t(v));
     break;
 
   case D3D12_HLSL_ENUM_TYPE_INT16_T:
-    Json.IntField("Value", int16_t(uint16_t(v)));
+    Json.IntField(Name, int16_t(uint16_t(v)));
     break;
 
   default:
-    Json.UIntField("Value", v);
+    Json.UIntField(Name, v);
     break;
   }
 }
@@ -1101,6 +1108,8 @@ static void PrintIfSwitchStatement(const ReflectionData &Reflection,
                                    const ReflectionIfSwitchStmt &Stmt,
                                    JsonWriter &Json) {
 
+  (void) Reflection;
+
   if (Stmt.HasConditionVar())
     Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
 
@@ -1111,6 +1120,8 @@ static void PrintIfSwitchStatement(const ReflectionData &Reflection,
 static void PrintBranchStatement(const ReflectionData &Reflection,
                                  const ReflectionBranchStmt &Stmt,
                                  JsonWriter &Json) {
+
+  (void) Reflection;
 
   if (Stmt.HasConditionVar())
     Json.BoolField("HasConditionVar", Stmt.HasConditionVar());
@@ -1191,6 +1202,9 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
 
   switch (nodeType) {
 
+  default:
+    break;
+
   case D3D12_HLSL_NODE_TYPE_FUNCTION:
     Json.Object(
         "Function", [&node, &Reflection, &Json, &Settings, &childrenToSkip]() {
@@ -1267,7 +1281,7 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
   case D3D12_HLSL_NODE_TYPE_CASE:
 
     Json.Object(
-        "Case", [&node, &Reflection, &Json, &Settings, &childrenToSkip]() {
+        "Case", [&node, &Reflection, &Json]() {
           const ReflectionBranchStmt &branch =
               Reflection.BranchStatements[node.GetLocalId()];
           if (!branch.IsComplexCase()) {
@@ -1317,14 +1331,14 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
 
   if (stmtType) {
     Json.Object(stmtType, [&node, &Reflection, &Json, &Settings, NodeId,
-                           &childrenToSkip, nodeType, hasSymbols]() {
+                           &childrenToSkip, hasSymbols]() {
       const ReflectionScopeStmt &stmt =
           Reflection.Statements[node.GetLocalId()];
 
       uint32_t start = NodeId + 1;
 
       if (stmt.HasConditionVar())
-        Json.Object("Condition", [NodeId, &Reflection, &Json, &start, &Settings,
+        Json.Object("Condition", [&Reflection, &Json, &start, &Settings,
                                   hasSymbols]() {
           if (hasSymbols)
             PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
@@ -1358,11 +1372,11 @@ uint32_t PrintNodeRecursive(const ReflectionData &Reflection, uint32_t NodeId,
 
     if (stmt.HasConditionVar())
       Json.Object("Switch", [&stmt, &Reflection, &Json, &Settings, NodeId,
-                             &childrenToSkip, nodeType, hasSymbols]() {
+                             &childrenToSkip, hasSymbols]() {
         uint32_t start = NodeId + 1;
 
         if (stmt.HasConditionVar())
-          Json.Object("Condition", [NodeId, &Reflection, &Json, &start,
+          Json.Object("Condition", [&Reflection, &Json, &start,
                                     &Settings, hasSymbols]() {
             if (hasSymbols)
               PrintSymbol(Json, Reflection, Reflection.NodeSymbols[start],
@@ -1444,7 +1458,7 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
         }
       });
 
-      json.Array("Functions", [this, &json, HideFileInfo, &settings] {
+      json.Array("Functions", [this, &json, &settings] {
         for (uint32_t i = 0; i < uint32_t(Functions.size()); ++i) {
           JsonWriter::ObjectScope nodeRoot(json);
           PrintFunction(json, *this, i, settings);
@@ -1474,7 +1488,7 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
         }
       });
 
-      json.Array("Enums", [this, &json, hasSymbols, HideFileInfo, &settings] {
+      json.Array("Enums", [this, &json, &settings] {
         for (uint32_t i = 0; i < uint32_t(Enums.size()); ++i) {
           JsonWriter::ObjectScope nodeRoot(json);
           PrintEnum(json, *this, i, settings);
@@ -1482,14 +1496,14 @@ std::string ReflectionData::ToJson(bool HideFileInfo,
       });
 
       json.Array(
-          "EnumValues", [this, &json, hasSymbols, HideFileInfo, &settings] {
+          "EnumValues", [this, &json, &settings] {
             for (uint32_t i = 0; i < uint32_t(EnumValues.size()); ++i) {
               JsonWriter::ObjectScope valueRoot(json);
               PrintEnumValue(json, *this, EnumValues[i].NodeId, settings);
             }
           });
 
-      json.Array("Annotations", [this, &json, hasSymbols] {
+      json.Array("Annotations", [this, &json] {
         for (uint32_t i = 0; i < uint32_t(Annotations.size()); ++i) {
           const ReflectionAnnotation &annot = Annotations[i];
           JsonWriter::ObjectScope valueRoot(json);

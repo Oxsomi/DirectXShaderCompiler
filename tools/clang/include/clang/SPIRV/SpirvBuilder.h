@@ -16,6 +16,7 @@
 #include "clang/SPIRV/SpirvInstruction.h"
 #include "clang/SPIRV/SpirvModule.h"
 
+#include "spirv/unified1/NonSemanticDebugBreak.h"
 #include "spirv/unified1/NonSemanticDebugPrintf.h"
 
 namespace clang {
@@ -273,6 +274,12 @@ public:
                                                   SpirvInstruction *sample,
                                                   SourceLocation);
 
+  /// \brief Creates an OpUntypedImageTexelPointerEXT SPIR-V instruction with
+  /// the given parameters.
+  SpirvUntypedImageTexelPointerEXT *createUntypedImageTexelPointerEXT(
+      QualType resultType, SpirvInstruction *image,
+      SpirvInstruction *coordinate, SpirvInstruction *sample, SourceLocation);
+
   /// \brief Creates an OpConverPtrToU SPIR-V instruction with the given
   /// parameters.
   SpirvConvertPtrToU *createConvertPtrToU(SpirvInstruction *ptr, QualType type);
@@ -285,6 +292,10 @@ public:
   ///
   /// If compareVal is given a non-zero value, *Dref* variants of OpImageSample*
   /// will be generated.
+  ///
+  /// If sampler is set, it defines the sampler along *image* to create the
+  /// combined image sampler. Otherwise, the *image* parameter must point to a
+  /// sampled image.
   ///
   /// If lod or grad is given a non-zero value, *ExplicitLod variants of
   /// OpImageSample* will be generated; otherwise, *ImplicitLod variant will
@@ -333,6 +344,10 @@ public:
                         SourceLocation loc, SourceRange range = {});
 
   /// \brief Creates SPIR-V instructions for gathering the given image.
+  ///
+  /// If the of `image` is a sampled image, then that image will be gathered.
+  /// In this case, `sampler` must be `nullptr`. If `image` is not a sampled
+  /// image, a sampled image will be created by combining `image` and `sampler`.
   ///
   /// If compareVal is given a non-null value, OpImageDrefGather or
   /// OpImageSparseDrefGather will be generated; otherwise, OpImageGather or
@@ -433,6 +448,10 @@ public:
   SpirvInstruction *createNonSemanticDebugPrintfExtInst(
       QualType resultType, NonSemanticDebugPrintfInstructions instId,
       llvm::ArrayRef<SpirvInstruction *> operands, SourceLocation);
+
+  /// \brief Creates an OpExtInst instruction for the NonSemantic.DebugBreak
+  /// extension set. Returns the resulting instruction pointer.
+  SpirvInstruction *createNonSemanticDebugBreakExtInst(SourceLocation);
 
   SpirvInstruction *createIsNodePayloadValid(SpirvInstruction *payloadArray,
                                              SpirvInstruction *nodeIndex,
@@ -617,8 +636,7 @@ public:
   /// support a single entry point per module for now.
   inline void addEntryPoint(spv::ExecutionModel em, SpirvFunction *target,
                             llvm::StringRef targetName,
-                            llvm::ArrayRef<SpirvVariable *> interfaces);
-
+                            llvm::ArrayRef<SpirvVariableLike *> interfaces);
   /// \brief Sets the shader model version, source file name, and source file
   /// content. Returns the SpirvString instruction of the file name.
   inline SpirvString *setDebugSource(uint32_t major, uint32_t minor,
@@ -694,6 +712,19 @@ public:
                llvm::StringRef name = "",
                llvm::Optional<SpirvInstruction *> init = llvm::None,
                SourceLocation loc = {});
+
+  /// \brief Adds an untyped module variable.
+  SpirvUntypedVariableKHR *
+  createUntypedVariableKHR(const SpirvType *valueType,
+                           spv::StorageClass storageClass, llvm::StringRef name,
+                           SourceLocation loc = {});
+
+  /// \brief Creates an OpUntypedAccessChainKHR instruction.
+  SpirvUntypedAccessChainKHR *
+  createUntypedAccessChainKHR(const SpirvType *resultType,
+                              const SpirvType *baseType, SpirvInstruction *base,
+                              llvm::ArrayRef<SpirvInstruction *> indexes,
+                              SourceLocation loc);
 
   /// \brief Decorates the given target with the given location.
   void decorateLocation(SpirvInstruction *target, uint32_t location);
@@ -961,13 +992,12 @@ void SpirvBuilder::setMemoryModel(spv::AddressingModel addrModel,
   mod->setMemoryModel(new (context) SpirvMemoryModel(addrModel, memModel));
 }
 
-void SpirvBuilder::addEntryPoint(spv::ExecutionModel em, SpirvFunction *target,
-                                 llvm::StringRef targetName,
-                                 llvm::ArrayRef<SpirvVariable *> interfaces) {
+void SpirvBuilder::addEntryPoint(
+    spv::ExecutionModel em, SpirvFunction *target, llvm::StringRef targetName,
+    llvm::ArrayRef<SpirvVariableLike *> interfaces) {
   mod->addEntryPoint(new (context) SpirvEntryPoint(
       target->getSourceLocation(), em, target, targetName, interfaces));
 }
-
 SpirvString *
 SpirvBuilder::setDebugSource(uint32_t major, uint32_t minor,
                              const std::vector<llvm::StringRef> &fileNames,

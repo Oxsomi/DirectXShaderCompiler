@@ -852,6 +852,13 @@ private:
                                                SourceLocation loc,
                                                SourceRange range);
 
+  SpirvInstruction *processCountBitsIntrinsic(const CallExpr *callExpr,
+                                              clang::SourceLocation srcLoc);
+  SpirvInstruction *generateCountBits16(const CallExpr *callExpr,
+                                        clang::SourceLocation srcLoc);
+  SpirvInstruction *generateCountBits64(const CallExpr *callExpr,
+                                        clang::SourceLocation srcLoc);
+
   // Processes the `reversebits` intrinsic
   SpirvInstruction *processReverseBitsIntrinsic(const CallExpr *expr,
                                                 clang::SourceLocation srcLoc);
@@ -1313,7 +1320,7 @@ private:
 
   /// \brief Returns OpVariable to be used as 'Interface' operands of
   /// OpEntryPoint. entryPoint is the SpirvFunction for the OpEntryPoint.
-  std::vector<SpirvVariable *>
+  std::vector<SpirvVariableLike *>
   getInterfacesForEntryPoint(SpirvFunction *entryPoint);
 
   /// \brief Emits OpBeginInvocationInterlockEXT and add the appropriate
