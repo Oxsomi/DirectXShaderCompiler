@@ -1,0 +1,38 @@
+{#- Conan 2 host profile: DXC -> wasm64 via a locally installed emsdk.
+    Usage:
+      conan create . -pr:h ./wasm/profiles/emscripten-wasm64.jinja -pr:b default --build=missing
+    Reads $EMSDK (default ~/emsdk).
+
+    NOTE (conan >= 2.18): prefer the native model instead of this shim:
+      arch=wasm64, compiler=emcc, compiler.version=<exact emsdk version>
+    Conan 2.11 (current on this machine) knows neither, hence arch=wasm +
+    explicit -sMEMORY64 flags. emcc has NO ABI stability between versions;
+    rebuild everything when bumping emsdk. -#}
+{% set emsdk = os.getenv("EMSDK", os.path.join(os.getenv("HOME", "/root"), "emsdk")) %}
+{% set em = emsdk + "/upstream/emscripten" %}
+
+[settings]
+os=Emscripten
+arch=wasm
+build_type=Release
+compiler=clang
+compiler.version=19
+compiler.libcxx=libc++
+compiler.cppstd=20
+
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja
+tools.cmake.cmaketoolchain:user_toolchain=["{{ em }}/cmake/Modules/Platform/Emscripten.cmake"]
+tools.build:compiler_executables={"c": "{{ em }}/emcc", "cpp": "{{ em }}/em++"}
+# EH mode + wasm64: must be identical here and in every consumer link (OxC3).
+tools.build:cflags=["-fwasm-exceptions", "-m64"]
+tools.build:cxxflags=["-fwasm-exceptions", "-m64"]
+tools.build:exelinkflags=["-fwasm-exceptions", "-m64", "-sALLOW_MEMORY_GROWTH=1", "-sSTACK_SIZE=8MB", "-sMAXIMUM_MEMORY=16GB"]
+
+[buildenv]
+CC={{ em }}/emcc
+CXX={{ em }}/em++
+AR={{ em }}/emar
+RANLIB={{ em }}/emranlib
+STRIP={{ em }}/emstrip
+EMSDK={{ emsdk }}

@@ -37,7 +37,10 @@ add_definitions(-DCMAKE_CFG_INTDIR="${CMAKE_CFG_INTDIR}")
 # Add the dependency on the generation step.
 add_file_dependencies(${CMAKE_CURRENT_SOURCE_DIR}/llvm-config.cpp ${BUILDVARIABLES_OBJPATH})
 
-if(CMAKE_CROSSCOMPILING)
+# HLSL Change (Oxsomi): only wire the native llvm-config when the NATIVE
+# sub-build machinery actually exists (see LLVM_USE_HOST_TOOLS in the root
+# CMakeLists); prebuilt-tablegen cross builds don't have it.
+if(CMAKE_CROSSCOMPILING AND TARGET CONFIGURE_LLVM_NATIVE)
   set(${project}_LLVM_CONFIG_EXE "${LLVM_NATIVE_BUILD}/bin/llvm-config")
   set(${project}_LLVM_CONFIG_EXE ${${project}_LLVM_CONFIG_EXE} PARENT_SCOPE)
 
@@ -50,4 +53,4 @@ if(CMAKE_CROSSCOMPILING)
   add_dependencies(${project}NativeLLVMConfig CONFIGURE_LLVM_NATIVE)
 
   add_dependencies(llvm-config ${project}NativeLLVMConfig)
-endif(CMAKE_CROSSCOMPILING)
+endif()

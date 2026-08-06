@@ -18,4 +18,9 @@ if(MSVC)
   target_compile_options(dxcreflection PRIVATE /W4 /WX)
 else()
   target_compile_options(dxcreflection PRIVATE -Wall -Wextra -Werror -Wno-pedantic)
+  # Modern clang (e.g. emscripten, macOS) warns on unused function templates in
+  # the 3.7-era LLVM/Clang headers this includes; not actionable here.
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(dxcreflection PRIVATE -Wno-unused-template)
+  endif()
 endif()
