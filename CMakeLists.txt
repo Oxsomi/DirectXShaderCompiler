@@ -430,7 +430,12 @@ if(LLVM_DISABLE_LLVM_DYLIB_ATEXIT)
 endif()
 
 option(LLVM_OPTIMIZED_TABLEGEN "Force TableGen to be built with optimization" OFF)
-if(CMAKE_CROSSCOMPILING OR (LLVM_OPTIMIZED_TABLEGEN AND LLVM_ENABLE_ASSERTIONS))
+# HLSL Change (Oxsomi): honor an explicit -DLLVM_USE_HOST_TOOLS=OFF. Cross
+# builds that provide prebuilt LLVM_TABLEGEN/CLANG_TABLEGEN must be able to
+# opt out, because the auto-configured NATIVE sub-build uses default options
+# (LLVM_ENABLE_EH=OFF) which cannot compile this fork's LLVMSupport.
+if((CMAKE_CROSSCOMPILING AND NOT DEFINED LLVM_USE_HOST_TOOLS)
+    OR (LLVM_OPTIMIZED_TABLEGEN AND LLVM_ENABLE_ASSERTIONS))
   set(LLVM_USE_HOST_TOOLS ON)
 endif()
 

@@ -1688,7 +1688,11 @@ HRESULT ReadOptsAndValidate(hlsl::options::MainArgs &mainArgs,
   const llvm::opt::OptTable *table = ::options::getHlslOptTable();
 
   CComPtr<AbstractMemoryStream> pOutputStream;
-  IFT(CreateMemoryStream(GetGlobalHeapMalloc(), &pOutputStream));
+  // Use the caller's allocator, not the process-wide heap. The only caller is FromSource, which has already
+  // installed its instance's IMalloc as the thread malloc, and DxcCompiler::Compile allocates the equivalent
+  // option-error stream from m_pMalloc for the same reason. GetGlobalHeapMalloc() would put a per-invocation
+  // stream on the shared heap, whose non-Windows implementation is not thread safe.
+  IFT(CreateMemoryStream(DxcGetThreadMallocNoRef(), &pOutputStream));
   raw_stream_ostream outStream(pOutputStream);
 
   if (0 != hlsl::options::ReadDxcOpts(table,
