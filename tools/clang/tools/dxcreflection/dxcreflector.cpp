@@ -1183,8 +1183,17 @@ struct HLSLReflectionData : public IHLSLReflectionData {
 
     const ReflectionNodeSymbol &nodeSymbol = Data.NodeSymbols[NodeId];
 
+    // Guard the "no file source" sentinel (uint16_t(-1)): synthetic nodes (e.g. builtins) have no source,
+    // and indexing Sources[GetFileSourceId()] for them reads out of bounds. Mirrors the HasFileSource()
+    // check the JSON printer (DxcReflectionJson.cpp PrintSymbol) already does.
+
+    LPCSTR fileName = "";
+
+    if (nodeSymbol.HasFileSource())
+      fileName = Data.Strings[Data.Sources[nodeSymbol.GetFileSourceId()]].c_str();
+
     *pDesc = D3D12_HLSL_NODE_SYMBOL{
-        Data.Strings[Data.Sources[nodeSymbol.GetFileSourceId()]].c_str(),
+        fileName,
         nodeSymbol.GetSourceLineStart(), nodeSymbol.GetSourceLineCount(),
         nodeSymbol.GetSourceColumnStart(), nodeSymbol.GetSourceColumnEnd()};
 
