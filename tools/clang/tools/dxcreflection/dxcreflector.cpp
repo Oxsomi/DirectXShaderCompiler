@@ -945,10 +945,13 @@ struct HLSLReflectionData : public IHLSLReflectionData {
             ? Data.Strings[Data.NodeSymbols[enm.NodeId].GetNameId()].c_str()
             : "";
 
-    const ReflectionNode &node = Data.Nodes[enm.NodeId + 1 + ValueIndex];
+    uint32_t valueNodeId = enm.NodeId + 1 + ValueIndex;
+    const ReflectionNode &node = Data.Nodes[valueNodeId];
+
+    // NodeId is the enum value's own node (enm.NodeId + 1 + ValueIndex), not the parent enum's node.
 
     *pValueDesc = D3D12_HLSL_ENUM_VALUE{
-        name, Data.EnumValues[node.GetLocalId()].Value, enm.NodeId};
+        name, Data.EnumValues[node.GetLocalId()].Value, valueNodeId};
 
     return S_OK;
   }
@@ -1811,6 +1814,14 @@ public:
 
     if (!data || !data->GetBufferSize() || !ppReflection)
       return E_POINTER;
+
+    // The reflection object and every container Deserialize fills inside it are allocated through the
+    // overridden global operator new, which routes to the thread's current IMalloc. Without pinning it to
+    // this reflector's malloc (as FromSource, ToBlob and ToString all do), the object is allocated against
+    // whichever allocator the caller's thread happens to carry and released against whichever it carries
+    // later, which corrupts the heap once a second reflection runs on that thread.
+
+    DxcThreadMalloc TM(m_pMalloc);
 
     std::vector<std::byte> bytes((const std::byte *)data->GetBufferPointer(),
                                  (const std::byte *)data->GetBufferPointer() +
