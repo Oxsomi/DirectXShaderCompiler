@@ -9,6 +9,7 @@
 //                                                                           //
 ///////////////////////////////////////////////////////////////////////////////
 
+#include <algorithm>
 #include <cassert>
 #include <string>
 #include <unordered_map>
@@ -646,6 +647,40 @@ CollectUnderlyingArraySizes(QualType &T, std::vector<uint32_t> &Out,
   return ReflectionErrorSuccess;
 }
 
+namespace {
+
+// A record can only contain itself, or derive from itself, in a source that does not compile, which is
+// exactly what -reflect-allow-errors lets reach this walk. Expanding one recurses until the stack runs out,
+// so the records on the way in are held here and a member or base that reaches back into one already being
+// expanded is not descended into again.
+//
+// Thread local because a reflection runs on the thread that asked for it (the same reason FromSource pins
+// the thread malloc), so two concurrent reflections must not share the stack.
+
+thread_local std::vector<const RecordDecl *> recordsBeingExpanded;
+
+struct RecordExpansionGuard {
+
+  const bool cycle;
+
+  explicit RecordExpansionGuard(const RecordDecl *decl)
+      : cycle(std::find(recordsBeingExpanded.begin(), recordsBeingExpanded.end(),
+                        decl) != recordsBeingExpanded.end()) {
+    if (!cycle)
+      recordsBeingExpanded.push_back(decl);
+  }
+
+  ~RecordExpansionGuard() {
+    if (!cycle)
+      recordsBeingExpanded.pop_back();
+  }
+
+  RecordExpansionGuard(const RecordExpansionGuard &) = delete;
+  RecordExpansionGuard &operator=(const RecordExpansionGuard &) = delete;
+};
+
+} // namespace
+
 [[nodiscard]] ReflectionError
 GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
                  QualType Original, bool DefaultRowMaj) {
@@ -951,7 +986,9 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
 
     // Fill members
 
-    if (!standardType && recordDecl->isCompleteDefinition() &&
+    RecordExpansionGuard expanding(recordDecl);
+
+    if (!expanding.cycle && !standardType && recordDecl->isCompleteDefinition() &&
         cls != D3D_SVC_OBJECT) {
 
       // Base types

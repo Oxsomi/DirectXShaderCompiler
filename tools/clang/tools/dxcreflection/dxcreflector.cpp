@@ -712,10 +712,13 @@ struct HLSLReflectionData : public IHLSLReflectionData {
         functionParameters.push_back(i);
       }
 
-      // Filter out backward/fwd declarations for structs, unions, interfaces,
-      // functions, enums
+      // Filter out fwd declarations that were resolved to a later definition;
+      // the definition represents them in the per-type index lists. One that
+      // never gets a body (an interface method, an undefined fwd declare) IS
+      // the declaration, so it stays listed and its parameters stay reachable
+      // through GetFunctionDesc/GetFunctionParameter.
 
-      if (node.IsFwdDeclare()) {
+      if (node.IsFwdDeclare() && node.IsFwdBckDefined()) {
         ChildCountsNonRecursive[i] = uint32_t(ChildrenNonRecursive[i].size());
         continue;
       }
@@ -1106,14 +1109,49 @@ struct HLSLReflectionData : public IHLSLReflectionData {
     return S_OK;
   }
 
+  STDMETHOD(GetParameterTypeByNode)
+  (THIS_ _In_ UINT NodeId,
+   _Outptr_ ID3D12ShaderReflectionType **ppType) override {
+
+    IFR(ZeroMemoryToOut(ppType));
+
+    if (NodeId >= Data.Nodes.size())
+      return E_INVALIDARG;
+
+    const ReflectionNode &node = Data.Nodes[NodeId];
+
+    if (node.GetNodeType() != D3D12_HLSL_NODE_TYPE_PARAMETER)
+      return E_INVALIDARG;
+
+    // A Parameter's LocalId indexes the parameter table, and the type is one hop further on; every other
+    // value node's LocalId already indexes Types, which is why only this kind needs its own accessor.
+
+    if (node.GetLocalId() >= Data.Parameters.size())
+      return E_INVALIDARG;
+
+    const uint32_t typeId = Data.Parameters[node.GetLocalId()].TypeId;
+
+    if (typeId >= Types.size())
+      return E_INVALIDARG;
+
+    *ppType = &Types[typeId];
+    return S_OK;
+  }
+
   // Use D3D_RETURN_PARAMETER_INDEX to get description of the return value.
+  // FunctionIndex lives in the same space as GetFunctionDesc's: positions in
+  // the forward-declaration-resolved list, not raw ReflectionFunction storage.
+  // The two diverge once a body-less declaration (an interface method, a fwd
+  // declare) was merged away, so indexing storage directly would return the
+  // previous function for everything after it.
   STDMETHOD_(ID3D12FunctionParameterReflection *, GetFunctionParameter)
   (THIS_ _In_ UINT FunctionIndex, THIS_ _In_ INT ParameterIndex) override {
 
-    if (FunctionIndex >= Data.Functions.size())
+    if (FunctionIndex >= NonFwdIds[int(FwdDeclType::FUNCTION)].size())
       return nullptr;
 
-    const ReflectionFunction &func = Data.Functions[FunctionIndex];
+    const ReflectionFunction &func =
+        Data.Functions[NonFwdIds[int(FwdDeclType::FUNCTION)][FunctionIndex]];
 
     if (ParameterIndex == D3D_RETURN_PARAMETER_INDEX) {
 
@@ -1563,12 +1601,14 @@ HRESULT GenerateAST(DxcLangExtensionsHelper *pExtHelper, LPCSTR pFileName,
   TranslationUnitDecl *tu = C.getTranslationUnitDecl();
   astHelper.tu = tu;
 
-  if (compiler.getDiagnosticClient().getNumErrors() > 0) {
-    astHelper.bHasErrors = true;
+  // Errors are recorded here, not acted on: whether they are fatal is GetFromSource's policy, which
+  // -reflect-allow-errors changes. Returning E_FAIL here would take that decision away from it, and the
+  // AST is worth keeping either way since clang's recovery leaves the declarations that did parse.
+  astHelper.bHasErrors = compiler.getDiagnosticClient().getNumErrors() > 0;
+
+  if (astHelper.bHasErrors)
     w.flush();
-    return E_FAIL;
-  }
-  astHelper.bHasErrors = false;
+
   return S_OK;
 }
 
@@ -1594,7 +1634,11 @@ HRESULT GetFromSource(DxcLangExtensionsHelper *pHelper, LPCSTR pFileName,
     return hr;
   }
 
-  if (astHelper.bHasErrors) {
+  // Errors normally stop here: a reflection of a source that does not compile is not something a build
+  // should consume. -reflect-allow-errors is for the other consumer, an editor describing a file as it
+  // is being typed, where refusing everything on one bad token means no navigation at all. Clang's
+  // error recovery leaves the declarations that did parse intact, so those are what gets walked.
+  if (astHelper.bHasErrors && !opts.ReflOpt.AllowErrors) {
     w.flush();
     return E_FAIL;
   }
@@ -1794,6 +1838,8 @@ public:
                                      pRemap.get(), opts, pDefines, defineCount,
                                      errors, rewrite, msfPtr, reflection);
 
+      // Under -reflect-allow-errors GetFromSource succeeds despite the diagnostics, so the blob is dumped
+      // here as usual and the errors still reach the caller through ErrorOutput below.
       std::vector<std::byte> Bytes;
 
       if (SUCCEEDED(status))

@@ -277,6 +277,13 @@ DECLARE_INTERFACE_(IHLSLReflectionData, IUnknown) {
   STDMETHOD(GetTypeByIndex)
   (THIS_ _In_ UINT Index, _Outptr_ ID3D12ShaderReflectionType * *ppType) PURE;
 
+  // Type of a Parameter node, which its LocalId does not reach: that indexes the parameter table, and the
+  // type sits one hop further on. D3D12_PARAMETER_DESC carries only the scalar shape (class, rows,
+  // columns), so a struct parameter is otherwise indistinguishable from any other struct; this is what
+  // names `inout Payload p` as Payload. Fails for a node that is not a Parameter.
+  STDMETHOD(GetParameterTypeByNode)
+  (THIS_ _In_ UINT NodeId, _Outptr_ ID3D12ShaderReflectionType * *ppType) PURE;
+
   STDMETHOD(GetEnumDesc)
   (THIS_ _In_ UINT EnumIndex, _Out_ D3D12_HLSL_ENUM_DESC * pDesc) PURE;
 

@@ -611,6 +611,8 @@ def reflect_scopes : Flag<["-", "/"], "reflect-scopes">, Group<hlslreflect_Group
   HelpText<"Reflect HLSL scopes (variables and structs defined in functions).">;
 def reflect_disable_symbols : Flag<["-", "/"], "reflect-disable-symbols">, Group<hlslreflect_Group>, Flags<[ReflectOption]>,
   HelpText<"Reflect HLSL disable symbols.">;
+def reflect_allow_errors : Flag<["-", "/"], "reflect-allow-errors">, Group<hlslreflect_Group>, Flags<[ReflectOption]>,
+  HelpText<"Reflect what parsed even when the source has errors, for editor features on incomplete code.">;
 
 def reflect_show_file_info : Flag<["-", "/"], "reflect-show-file-info">, Group<hlslreflect_Group>, Flags<[ReflectOption]>,
   HelpText<"Show file symbol info in the reflection output json.">;

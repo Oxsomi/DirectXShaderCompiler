@@ -126,6 +126,12 @@ struct ReflectOpts {
   bool UserTypes = false;      // OPT_reflect_user_types
   bool Scopes = false;         // OPT_reflect_scopes
   bool DisableSymbols = false; // OPT_reflect_disable_symbols
+
+  // Reflect the AST even when semantic analysis reported errors.
+  // Clang keeps a usable AST through error recovery, so the declarations that did parse are still
+  // describable; an editor navigating a file being typed needs exactly those, where a compile does not.
+  bool AllowErrors = false;    // OPT_reflect_allow_errors
+
   bool ShowFileInfo = false;   // OPT_reflect_show_file_info
   bool ShowRawData = false;    // OPT_reflect_show_raw_data
 };
