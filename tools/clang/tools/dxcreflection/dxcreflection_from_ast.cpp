@@ -1110,9 +1110,13 @@ GenerateTypeInfo(uint32_t &TypeId, ASTContext &ASTCtx, ReflectionData &Refl,
       break;
 
     case BuiltinType::HalfFloat:
+      type = D3D_SVT_FLOAT;
+      underlyingName = "float";
+      break;
+
     case BuiltinType::Half:
       type = D3D_SVT_FLOAT16;
-      underlyingName = "float16_t"; // TODO: half or float16_t?
+      underlyingName = "float16_t";
       break;
 
     case BuiltinType::Short:
