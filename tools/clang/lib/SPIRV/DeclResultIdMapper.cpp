@@ -1960,14 +1960,14 @@ void DeclResultIdMapper::createFieldCounterVars(
   assert(recordType);
   const auto *recordDecl = recordType->getDecl();
 
-  // Handle base classes first
+  // Handle base classes first. HLSL allows one base class plus any number of
+  // interfaces, and the field index math below reserves one slot per base
+  // (getNumBaseClasses counts them all), so every base gets its slot here too;
+  // interface bases have no fields, making their recursion a no-op.
   if (const auto *cxxRecordDecl = dyn_cast<CXXRecordDecl>(recordDecl)) {
-    // HLSL has at most one base class.
-    assert(cxxRecordDecl->getNumBases() <= 1 &&
-           "HLSL should have at most one base class.");
-    if (cxxRecordDecl->getNumBases() > 0) {
-      const auto &base = *cxxRecordDecl->bases().begin();
-      indices->push_back(0);
+    uint32_t baseIndex = 0;
+    for (const auto &base : cxxRecordDecl->bases()) {
+      indices->push_back(baseIndex++);
       createFieldCounterVars(rootDecl, base.getType(), indices);
       indices->pop_back();
     }
