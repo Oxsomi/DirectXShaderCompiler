@@ -133,14 +133,22 @@ LLVMContextImpl::~LLVMContextImpl() {
   for (FoldingSetIterator<AttributeSetImpl> I = AttrsLists.begin(),
          E = AttrsLists.end(); I != E; ) {
     FoldingSetIterator<AttributeSetImpl> Elem = I++;
-    delete &*Elem;
+    // HLSL Change: coallocated with its entries, so destroy and release the
+    // block rather than `delete`, which passes the declared type's size to
+    // sized deallocation.
+    AttributeSetImpl *Impl = &*Elem;
+    Impl->~AttributeSetImpl();
+    ::operator delete(Impl);
   }
 
   // Destroy attribute node lists.
   for (FoldingSetIterator<AttributeSetNode> I = AttrsSetNodes.begin(),
          E = AttrsSetNodes.end(); I != E; ) {
     FoldingSetIterator<AttributeSetNode> Elem = I++;
-    delete &*Elem;
+    // HLSL Change: coallocated with its attributes, same as above.
+    AttributeSetNode *Node = &*Elem;
+    Node->~AttributeSetNode();
+    ::operator delete(Node);
   }
 
   // Destroy MetadataAsValues.

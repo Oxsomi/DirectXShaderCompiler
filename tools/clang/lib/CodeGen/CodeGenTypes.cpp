@@ -45,9 +45,15 @@ CodeGenTypes::CodeGenTypes(CodeGenModule &cgm)
 CodeGenTypes::~CodeGenTypes() {
   llvm::DeleteContainerSeconds(CGRecordLayouts);
 
+  // HLSL Change: CGFunctionInfo::create coallocates its trailing ArgInfos through a raw operator new,
+  // so destroy and release the block rather than `delete`, which passes the declared type's size to
+  // sized deallocation.
   for (llvm::FoldingSet<CGFunctionInfo>::iterator
-       I = FunctionInfos.begin(), E = FunctionInfos.end(); I != E; )
-    delete &*I++;
+       I = FunctionInfos.begin(), E = FunctionInfos.end(); I != E; ) {
+    CGFunctionInfo *FI = &*I++;
+    FI->~CGFunctionInfo();
+    operator delete(FI);
+  }
 }
 
 void CodeGenTypes::addRecordTypeName(const RecordDecl *RD,
