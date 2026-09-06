@@ -551,8 +551,16 @@ void DxilLinkJob::AddResourceToDM(DxilModule &DM) {
     // Update ID.
     basePtr->SetID(ID);
 
-    basePtr->SetGlobalSymbol(GV);
-    DM.GetLLVMUsed().push_back(GV);
+    if (GV) {
+      basePtr->SetGlobalSymbol(GV);
+      DM.GetLLVMUsed().push_back(GV);
+    }
+
+    // Kept-but-unused: no global, undef symbol, as a keep-all compile emits.
+    else
+      basePtr->SetGlobalSymbol(UndefValue::get(
+          res->GetGlobalSymbol() ? res->GetGlobalSymbol()->getType()
+                                 : res->GetHLSLType()));
   }
   // Prevent global vars used for resources from being deleted through
   // optimizations while we still have hidden uses (pointers in resource
@@ -672,6 +680,44 @@ bool DxilLinkJob::AddGlobals(DxilModule &DM, ValueToValueMapTy &vmap) {
       }
     }
   }
+
+  // keep-all libraries keep their whole binding table through the link. The
+  // unused rows have no global (DCE'd inside the library), so they register
+  // with a null GV, and the mode is inherited so reflection still marks them.
+  SetVector<DxilLib *> keepLibs;
+  for (auto &it : m_functionDefs) {
+    DxilLib *pLib = it.second;
+    if (pLib->GetDxilModule().GetUnusedResourceBinding() ==
+        UnusedResourceBinding::KeepAll)
+      keepLibs.insert(pLib);
+  }
+
+  if (!keepLibs.empty()) {
+    DM.SetUnusedResourceBinding(UnusedResourceBinding::KeepAll);
+
+    for (DxilLib *pLib : keepLibs) {
+      DxilModule &tmpDM = pLib->GetDxilModule();
+      DxilTypeSystem &tmpTypeSys = tmpDM.GetTypeSystem();
+
+      auto addUnused = [&](DxilResourceBase *res) {
+        StringRef name = res->GetGlobalName();
+        if (name.empty() || m_resourceMap.count(name))
+          return;
+        m_resourceMap[name] = std::make_pair(res, nullptr);
+        typeSys.CopyTypeAnnotation(res->GetHLSLType(), tmpTypeSys);
+      };
+
+      for (auto &res : tmpDM.GetUAVs())
+        addUnused(res.get());
+      for (auto &res : tmpDM.GetSRVs())
+        addUnused(res.get());
+      for (auto &res : tmpDM.GetCBuffers())
+        addUnused(res.get());
+      for (auto &res : tmpDM.GetSamplers())
+        addUnused(res.get());
+    }
+  }
+
   return bSuccess;
 }
 
