@@ -3209,14 +3209,34 @@ INSTR.ILLEGALDXILOPCODE                               DXILOpCode must be valid o
 INSTR.ILLEGALDXILOPFUNCTION                           '%0' is not a DXILOpFuncition for DXILOpcode '%1'.
 INSTR.IMMBIASFORSAMPLEB                               bias amount for sample_b must be in the range [%0,%1], but %2 was specified as an immediate.
 INSTR.INBOUNDSACCESS                                  Access to out-of-bounds memory is disallowed.
-INSTR.LINALGILLEGALCOMPONENTTYPE                      Matrix Component Type '%0' not allowed in LinAlg Matrix.
-INSTR.LINALGILLEGALKDIM                               Matrix K Dimension out of bounds. K=%0 must be >= %1 and <= %2.
-INSTR.LINALGMATRIXDIMMISMATCH                         Matrix Dimension '%0x%1' does not match expected dimension %2x%3.
-INSTR.LINALGMATRIXNOTEXACTMATCH                       Matrix '%0' must exactly match matrix '%1'.
-INSTR.LINALGMATRIXSCOPEMISMATCH                       Matrix Scope '%0' does not match expected scope %1.
-INSTR.LINALGMATRIXSCOPENOTALLOWED                     Matrix Scope '%0' not allowed in %1 operation.
-INSTR.LINALGMATRIXUSEMISMATCH                         Matrix Use '%0' does not match expected use %1.
-INSTR.LINALGMATRIXUSEMISMATCH2                        Matrix Use '%0' does not match expected use %1 or %2.
+INSTR.LINALGILLEGALCOMPONENTTYPE                      Component type '%0' from %1 not allowed in LinAlg Matrix operations.
+INSTR.LINALGILLEGALKDIM                               %0 matrix K dimension out of bounds. K=%1 must be >= %2 and <= %3.
+INSTR.LINALGMATRIX2PARTSMUSTMATCH                     %0 matrix %1 '%2' must match %3 matrix %4 '%5'.
+INSTR.LINALGMATRIXBYTEWISEMUSTBEMULTIPLE              Parameter '%0' in bytes must be a multiple of %1, got %2 (%3 elements * %4 bytes per element).
+INSTR.LINALGMATRIXDIMKVECKMISMATCH                    %0 vector size '%1' must be %2 for input matrix with K '%3' and Type '%4'
+INSTR.LINALGMATRIXDIMVECTORMISMATCH                   %0 vector size '%1' must match input matrix M dimension '%2'
+INSTR.LINALGMATRIXGSMEMMUSTBELARGEENOUGH              Groupshared memory holds '%0' scalars but must hold at least '%1' scalars.
+INSTR.LINALGMATRIXGSMEMTYPEMUSTMATCH                  Groupshared memory inner type '%0' must match %1 type '%2'.
+INSTR.LINALGMATRIXLAYOUTREQSTRIDE                     %0 with layout '%1' requires stride 0.
+INSTR.LINALGMATRIXLOADTHREADREQUIRESBAB               Loading matrix with Thread scope requires ByteAddressBuffer.
+INSTR.LINALGMATRIXMATRIXKDIMMUSTMATCH                 K dim of A matrix '%0' must match K dim of B matrix '%1'. %2 != %3.
+INSTR.LINALGMATRIXMATRIXRESDIMMUSTMATCH               %0 matrix dimension '%1' must match A.MxB.N '%2'.
+INSTR.LINALGMATRIXNOTEXACTMATCH                       %0 matrix '%1' must exactly match %2 matrix '%3'.
+INSTR.LINALGMATRIXREQUIRESLAYOUT2                     %0 requires layout %1 or %2.
+INSTR.LINALGMATRIXREQUIRESRWBAB                       %0 requires RWByteAddressBuffer.
+INSTR.LINALGMATRIXSCOPEMISMATCH                       %0 matrix scope '%1' does not match expected scope %2.
+INSTR.LINALGMATRIXSCOPEMISMATCH2                      %0 matrix scope '%1' does not match expected scope %2 or %3.
+INSTR.LINALGMATRIXSCOPEMUSTMATCH3                     Matrix scope must be the same for all matrices. %0 '%1', %2 '%3', %4 '%5'.
+INSTR.LINALGMATRIXSCOPEMUSTMATCH4                     Matrix scope must be the same for all matrices. %0 '%1', %2 '%3', %4 '%5', %6 '%7'.
+INSTR.LINALGMATRIXSCOPEREQLAYOUT2                     %0 matrix with scope '%1' requires layout %2 or %3 for %4.
+INSTR.LINALGMATRIXUNSIGNEDFLOATTYPENOTALLOWED         Float-like type '%0' must be signed
+INSTR.LINALGMATRIXUSEMISMATCH                         %0 matrix use '%1' does not match expected use %2.
+INSTR.LINALGMATRIXUSEMISMATCH2                        %0 matrix use '%1' does not match expected use %2 or %3.
+INSTR.LINALGMATRIXVECELEMCOUNTMISMATCH                Return vector size '%0' must match size '%1' derived from input vector size and type.
+INSTR.LINALGMATRIXVECELEMENTTYPEMISMATCH              %0 vector element type '%1' must match %2 vector element type '%3'
+INSTR.LINALGMATRIXVECTORTYPEMUSTMATCH                 %0 vector element type '%1' must match %2 matrix element type '%3'.
+INSTR.LINALGMATRIXVECTORTYPEMUSTMATCHPACKED           %0 vector element type '%1' must be i32 for %2 matrix with non-native element type '%3'.
+INSTR.LINALGMETADATAMISSING                           %0 matrix must have well-formed metadata.
 INSTR.MAYREORDERTHREADUNDEFCOHERENCEHINTPARAM         Use of undef coherence hint or num coherence hint bits in MaybeReorderThread.
 INSTR.MINPRECISIONNOTPRECISE                          Instructions marked precise may not refer to minprecision values.
 INSTR.MINPRECISONBITCAST                              Bitcast on minprecison types is not allowed.
@@ -3244,6 +3264,7 @@ INSTR.OPCODERESERVED                                  Instructions must not refe
 INSTR.OPCONST                                         DXIL intrinsic requires an immediate constant operand
 INSTR.OPCONSTRANGE                                    Constant values must be in-range for operation.
 INSTR.OPERANDRANGE                                    DXIL intrinsic operand must be within defined range
+INSTR.PARAMMINIMUMVALUE                               Parameter must be greater than a minimum value
 INSTR.PARAMMULTIPLE                                   Parameter must be a valid multiple
 INSTR.PTRBITCAST                                      Pointer type bitcast must be have same size.
 INSTR.REORDERCOHERENTREQUIRESSM69                     reordercoherent requires SM 6.9 or later.
@@ -3403,6 +3424,7 @@ SM.RESOURCERANGEOVERLAP                               Resource ranges must not o
 SM.ROVONLYINPS                                        RasterizerOrdered objects are only allowed in 5.0+ pixel shaders.
 SM.SAMPLECOUNTONLYON2DMS                              Only Texture2DMS/2DMSArray could has sample count.
 SM.SEMANTIC                                           Semantic must be defined in target shader model
+SM.SHADERSTAGE                                        Shader stage must be supported by the target shader model
 SM.STREAMINDEXRANGE                                   Stream index (%0) must between 0 and %1.
 SM.TESSFACTORFORDOMAIN                                Required TessFactor for domain not found declared anywhere in Patch Constant data.
 SM.TESSFACTORSIZEMATCHDOMAIN                          TessFactor rows, columns (%0, %1) invalid for domain %2.  Expected %3 rows and 1 column.

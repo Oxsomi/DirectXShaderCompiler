@@ -2862,8 +2862,8 @@ static const OP::OpCodeProperty ExperimentalOps_OpCodeProps[] = {
      "linAlgMatrixLoadFromMemory",
      Attribute::None,
      2,
-     {{0x200}, {0xe7}},
-     {{0x0}, {0x0}}}, // Overloads: o,hfdwil
+     {{0x200}, {0x4e7}},
+     {{0x0}, {0xe7}}}, // Overloads: o,hfdwil<hfdwil
     {OC::LinAlgMatrixLength,
      "LinAlgMatrixLength",
      OCC::LinAlgMatrixLength,
@@ -2910,8 +2910,8 @@ static const OP::OpCodeProperty ExperimentalOps_OpCodeProps[] = {
      "linAlgMatrixStoreToMemory",
      Attribute::None,
      2,
-     {{0x200}, {0xe7}},
-     {{0x0}, {0x0}}}, // Overloads: o,hfdwil
+     {{0x200}, {0x4e7}},
+     {{0x0}, {0xe7}}}, // Overloads: o,hfdwil<hfdwil
     {OC::LinAlgMatrixQueryAccumulatorLayout,
      "LinAlgMatrixQueryAccumulatorLayout",
      OCC::LinAlgMatrixQueryAccumulatorLayout,
@@ -2966,8 +2966,8 @@ static const OP::OpCodeProperty ExperimentalOps_OpCodeProps[] = {
      "linAlgMatrixAccumulateToMemory",
      Attribute::None,
      2,
-     {{0x200}, {0xe7}},
-     {{0x0}, {0x0}}}, // Overloads: o,hfdwil
+     {{0x200}, {0x4e7}},
+     {{0x0}, {0xe7}}}, // Overloads: o,hfdwil<hfdwil
     {OC::LinAlgMatrixOuterProduct,
      "LinAlgMatrixOuterProduct",
      OCC::LinAlgMatrixOuterProduct,
@@ -3396,6 +3396,19 @@ bool OP::IsDxilOpGradient(OpCode C) {
   return (60 <= op && op <= 61) || op == 64 || op == 81 ||
          (83 <= op && op <= 86) || (174 <= op && op <= 175) || op == 255;
   // OPCODE-GRADIENT:END
+}
+
+bool OP::IsDxilOpConvergent(OpCode C) {
+  unsigned op = (unsigned)C;
+  // clang-format off
+  // Python lines need to be not formatted.
+  /* <py::lines('OPCODE-CONVERGENT')>hctdb_instrhelp.get_instrs_pred("op", "is_convergent")</py>*/
+  // clang-format on
+  // OPCODE-CONVERGENT:BEGIN
+  // Instructions: DerivCoarseX=83, DerivCoarseY=84, DerivFineX=85,
+  // DerivFineY=86
+  return (83 <= op && op <= 86);
+  // OPCODE-CONVERGENT:END
 }
 
 bool OP::IsDxilOpFeedback(OpCode C) {
@@ -3988,7 +4001,7 @@ void OP::GetMinShaderModelAndMask(OpCode C, bool bWithTranslation,
   if ((2147483649 <= op && op <= 2147483650)) {
     major = 6;
     minor = 10;
-    mask = SFLAG(Compute) | SFLAG(Mesh) | SFLAG(Amplification) | SFLAG(Node);
+    mask = SFLAG(Compute) | SFLAG(Mesh) | SFLAG(Amplification);
     return;
   }
   // Instructions: ClusterID=2147483651, TriangleObjectPosition=2147483655
@@ -6649,7 +6662,6 @@ Function *OP::GetOpFunc(OpCode opCode, Type *pOverloadType) {
     A(EXT(2));
     A(pI32);
     A(EXT(3));
-    A(pI32);
     break;
   case OpCode::LinAlgMatrixAccumulateToDescriptor:
     A(pV);

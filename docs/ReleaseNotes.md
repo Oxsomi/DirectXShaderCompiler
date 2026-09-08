@@ -22,6 +22,33 @@ The included licenses apply to the following files:
 Place release notes for the upcoming release below this line and remove this
 line upon naming the release. Refer to previous for appropriate section names.
 
+#### Bug Fixes
+
+- Fixed derivative operations being moved into divergent control flow, which
+  could produce incorrect results
+  [#8001](https://github.com/microsoft/DirectXShaderCompiler/issues/8001).
+- SPIR-V: Fixed an invalid `OpSelect` being generated when optimizing for
+  SPIR-V 1.3 and earlier
+  [#8603](https://github.com/microsoft/DirectXShaderCompiler/issues/8603).
+- Fix a crash generating DXIL from sources containing a dynamic resource heap
+  access that was discarded. Identified during development of SPIR-V support for
+  [descriptor heaps](https://github.com/microsoft/DirectXShaderCompiler/pull/8517#discussion_r3752113078).
+
+#### HLSL Language
+
+- Starting with HLSL 202x, the count in `[unroll(N)]` is a partial-unroll hint
+  and no longer limits the number of loop iterations
+  [#8789](https://github.com/microsoft/DirectXShaderCompiler/issues/8789).
+- Casting a scalar to a struct or array containing a resource is now an error
+  instead of crashing
+  [#6661](https://github.com/microsoft/DirectXShaderCompiler/issues/6661).
+
+#### Bug Fixes
+
+- Fixed internal compiler errors when a member method is called on a ray payload
+  or on one of its fields with payload access qualifiers enabled
+  [#6464](https://github.com/microsoft/DirectXShaderCompiler/issues/6464).
+
 ### Upcoming Preview Release
 
 These changes apply to experimental preview shader models only and will not be
@@ -40,6 +67,9 @@ first shipped in the 1.10.2605 preview.
   [#8588](https://github.com/microsoft/DirectXShaderCompiler/pull/8588).
 - Restricted the component types allowed in LinAlg matrices
   [#8608](https://github.com/microsoft/DirectXShaderCompiler/pull/8608).
+- Added `BFloat16` to the ComponentType enum in DxilConstants and the linalg
+  header [#8722](https://github.com/microsoft/DirectXShaderCompiler/issues/8722).
+- Removed work graph support from Shader Model 6.10, and DXIL 1.10 [microsoft/hlsl-specs#915](https://github.com/microsoft/hlsl-specs/issues/915).
 
 ### Version 1.9.2607
 
