@@ -1887,9 +1887,15 @@ public:
       reflectData->Finalize();
 
       return S_OK;
+    } catch (const std::exception &e) {
+      delete reflectData;
+      *ppReflection = nullptr;
+      fprintf(stderr, "Couldn't deserialize: unexpected exception: %s\n", e.what());
+      return E_FAIL;
     } catch (...) {
       delete reflectData;
       *ppReflection = nullptr;
+      fprintf(stderr, "Couldn't deserialize: unexpected exception\n");
       return E_FAIL;
     }
   }

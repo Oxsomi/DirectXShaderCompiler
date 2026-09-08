@@ -921,8 +921,8 @@ ReflectionData::Deserialize(const std::vector<std::byte> &Bytes,
 
     const ReflectionNode &node = Nodes[buf.NodeId];
 
-    if (!node.GetChildCount())
-      return HLSL_REFL_ERR("Buffer requires at least one Variable child", i);
+    // A buffer may be childless: `cbuffer g {};` is legal, and a redefined cbuffer keeps its members
+    // only on the defining node, so the duplicate serializes without children.
 
     for (uint32_t j = 0; j < node.GetChildCount(); ++j) {
 
