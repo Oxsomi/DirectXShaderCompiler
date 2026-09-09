@@ -366,7 +366,7 @@ def metal : Flag<["-"], "metal">,
             HelpText<"Generate Metal code">;
 
 // SPIRV Change Starts
-def spirv : Flag<["-"], "spirv">, Group<spirv_Group>, Flags<[CoreOption, DriverOption]>,
+def spirv : Flag<["-"], "spirv">, Group<spirv_Group>, Flags<[CoreOption, DriverOption, ReflectOption]>,
   HelpText<"Generate SPIR-V code">;
 def fvk_stage_io_order_EQ : Joined<["-"], "fvk-stage-io-order=">, Group<spirv_Group>, Flags<[CoreOption, DriverOption, HelpHidden]>,
   HelpText<"Specify Vulkan stage I/O location assignment order">;

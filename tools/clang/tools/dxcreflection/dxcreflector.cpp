@@ -1499,6 +1499,10 @@ void SetupCompilerCommon(CompilerInstance &compiler,
   compiler.getLangOpts().HLSLVersion = opts.HLSLVersion;
   compiler.getLangOpts().PreserveUnknownAnnotations = true;
   compiler.getLangOpts().UseMinPrecision = !opts.Enable16BitTypes;
+  // Reflect the SPIR-V leg's view of the source when asked: this is what defines __spirv__ and
+  // declares the vk:: namespace, so `#ifdef __spirv__` code and vk:: attributes reflect the way that
+  // backend's compile sees them. No codegen runs here either way.
+  compiler.getLangOpts().SPIRV = opts.GenSPIRV;
   compiler.getDiagnostics().setIgnoreAllWarnings(!opts.OutputWarnings);
   compiler.getCodeGenOpts().MainFileName = pMainFile;
 
