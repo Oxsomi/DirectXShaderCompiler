@@ -7575,6 +7575,14 @@ def err_hlsl_packoffset_requires_cbuffer : Error<
   "packoffset is only allowed in a constant buffer">;
 def warn_hlsl_packoffset_mix : Warning<
   "cannot mix packoffset elements with nonpackoffset elements in a cbuffer">;
+def warn_hlsl_buffer_initializer : Warning<
+  "initializer for a variable in a %select{tbuffer|cbuffer}0 will be ignored">,
+  InGroup<HLSLBufferInitializer>;
+def err_hlsl_buffer_initializer : Error<
+  "variable in a %select{tbuffer|cbuffer}0 cannot have an initializer">;
+def warn_hlsl_groupshared_initializer : Warning<
+  "initializer of 'groupshared' variable will be ignored">,
+  InGroup<HLSLGroupSharedInitializer>;
 def err_hlsl_packoffset_overlap : Error<"packoffset overlap between %0, %1">;
 def err_hlsl_register_semantics_conflicting : Error<
   "conflicting register semantics">;
@@ -7848,11 +7856,8 @@ def warn_hlsl_unsupported_statement_for_switch_attribute : Warning<
 def warn_hlsl_unsupported_statement_for_loop_attribute : Warning<
   "attribute %0 can only be applied to 'for', 'while' and 'do' loop statements">,
   InGroup<HLSLAttributeStatement>;
-def err_hlsl_matrix_layout_wrong_type : Error<
-  "%0 can only be used with a matrix type">;
-def warn_hlsl_effect_object : Warning <
-  "effect object ignored - effect syntax is deprecated">,
-  InGroup< HLSLEffectsSyntax >;
+def err_hlsl_matrix_layout_wrong_type
+    : Error<"%0 can only be used with a matrix type">;
 def warn_hlsl_unused_call : Warning<
   "ignoring return value of function that only reads data">,
   InGroup<UnusedValue>;
@@ -7929,6 +7934,9 @@ def err_hlsl_unsupported_object_context
     "entry function parameters|entry function return type|"
     "patch constant function parameters|patch constant function return type|"
     "payload parameters|attributes|builtin template parameters|structured buffers|global variables|groupshared variables}1">;
+def err_hlsl_unsupported_declaration_in_buffer
+    : Error<"unsupported declaration %0 in %select{tbuffer|cbuffer}1 "
+            "declaration">;
 def err_hlsl_logical_binop_scalar : Error<
    "operands for short-circuiting logical binary operator must be scalar, for non-scalar types use '%select{and|or}0'">;
 def err_hlsl_ternary_scalar : Error<
@@ -8082,6 +8090,9 @@ def err_hlsl_linalg_matrix_attribute_on_invalid_type
     : Error<"matrix attributes can only be applied to %0">;
 def err_hlsl_linalg_attributed_matrix_required
     : Error<"argument must be linear algebra matrix type">;
+def err_hlsl_linalg_matrix_global_not_static
+    : Error<"global variable %0 containing a linear algebra matrix must be "
+            "declared 'static'">;
 
 def err_hlsl_linalg_unsupported_stage : Error<
    "builtin unavailable in shader stage '%0' (requires 'compute', 'mesh' or 'amplification')">;

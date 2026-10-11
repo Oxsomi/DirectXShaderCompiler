@@ -1051,7 +1051,7 @@ void SpirvEmitter::HandleTranslationUnit(ASTContext &context) {
 
 void SpirvEmitter::doDecl(const Decl *decl) {
   if (isa<EmptyDecl>(decl) || isa<TypeAliasTemplateDecl>(decl) ||
-      isa<VarTemplateDecl>(decl))
+      isa<VarTemplateDecl>(decl) || isa<StaticAssertDecl>(decl))
     return;
 
   // Implicit decls are lazily created when needed.
@@ -1937,17 +1937,10 @@ void SpirvEmitter::registerCapabilitiesAndExtensionsForVarDecl(
 
 void SpirvEmitter::doHLSLBufferDecl(const HLSLBufferDecl *bufferDecl) {
   // This is a cbuffer/tbuffer decl.
-  // Check and emit warnings for member intializers which are not
-  // supported in Vulkan
   for (const auto *member : bufferDecl->decls()) {
     if (const auto *varMember = dyn_cast<VarDecl>(member)) {
-      if (!spirvOptions.noWarnIgnoredFeatures) {
-        if (const auto *init = varMember->getInit())
-          emitWarning("%select{tbuffer|cbuffer}0 member initializer "
-                      "ignored since no Vulkan equivalent",
-                      init->getExprLoc())
-              << bufferDecl->isCBuffer() << init->getSourceRange();
-      }
+      if (varMember->getStorageClass() == StorageClass::SC_Static)
+        continue;
 
       // We cannot handle external initialization of column-major matrices now.
       if (isOrContainsNonFpColMajorMatrix(astContext, spirvOptions,
@@ -1969,6 +1962,12 @@ void SpirvEmitter::doHLSLBufferDecl(const HLSLBufferDecl *bufferDecl) {
         DeclResultIdMapper::ContextUsageKind::ShaderRecordBufferKHR);
   } else {
     declIdMapper.createCTBuffer(bufferDecl);
+  }
+
+  for (const auto *member : bufferDecl->decls()) {
+    const auto *varMember = dyn_cast<VarDecl>(member);
+    if (varMember && varMember->getStorageClass() == StorageClass::SC_Static)
+      doVarDecl(varMember);
   }
 }
 
@@ -2165,9 +2164,11 @@ void SpirvEmitter::doVarDecl(const VarDecl *decl) {
   // ConstantBuffers and TextureBuffers are not HLSLBufferDecls.
   if (const auto *bufferDecl =
           dyn_cast<HLSLBufferDecl>(decl->getDeclContext())) {
-    // This is a VarDecl of cbuffer/tbuffer type.
-    doHLSLBufferDecl(bufferDecl);
-    return;
+    if (decl->getStorageClass() != StorageClass::SC_Static) {
+      // This is a VarDecl of cbuffer/tbuffer type.
+      doHLSLBufferDecl(bufferDecl);
+      return;
+    }
   }
 
   if (decl->getAttr<VKInputAttachmentIndexAttr>()) {
@@ -2188,10 +2189,6 @@ void SpirvEmitter::doVarDecl(const VarDecl *decl) {
   // variables) belongs to the Function storage class.
   if (isExternalVar(decl)) {
     var = declIdMapper.createExternVar(decl);
-    if (decl->hasInit()) {
-      emitWarning("Initializer of external global will be ignored",
-                  decl->getLocation());
-    }
   } else {
     // We already know the variable is not externally visible here. If it does
     // not have local storage, it should be file scope variable.
@@ -3943,8 +3940,17 @@ SpirvEmitter::processFlatConversion(const QualType type,
       initInstr->setAstResultType(astContext.UnsignedLongLongTy);
   }
 
-  // Decompose `initInstr`.
-  std::vector<SpirvInstruction *> flatValues = decomposeToScalars(initInstr);
+  QualType sourceType = initInstr->getAstResultType();
+  if (hlsl::IsHLSLResourceType(sourceType))
+    sourceType = hlsl::GetHLSLResourceResultType(sourceType);
+
+  // A same-type conversion emits one scalar per SPIR-V field, but a cast that
+  // changes the shape, keeps one scalar (potentially with merged bitfields) per
+  // AST field. includeMergedBitfields determines which indexing is used.
+  const bool includeMergedBitfields =
+      !astContext.hasSameUnqualifiedType(type, sourceType);
+  std::vector<SpirvInstruction *> flatValues =
+      decomposeToScalars(initInstr, includeMergedBitfields);
 
   if (flatValues.size() == 1) {
     return splatScalarToGenerate(type, flatValues[0], SpirvLayoutRule::Void);
@@ -16224,9 +16230,22 @@ SpirvInstruction *SpirvEmitter::processRawBufferLoad(const CallExpr *callExpr) {
     return nullptr;
   }
 
-  uint32_t alignment = callExpr->getNumArgs() == 1
-                           ? 4
-                           : getRawBufferAlignment(callExpr->getArg(1));
+  uint32_t alignment = 0;
+  if (callExpr->getNumArgs() == 1) {
+    // Compute the required scalar alignment from the loaded type.
+    // Per the Vulkan spec, PhysicalStorageBuffer alignment must be at least the
+    // largest scalar alignment within the type, this matches scalar layout
+    // rules. See:
+    // https://docs.vulkan.org/guide/latest/buffer_device_address_alignment.html
+    AlignmentSizeCalculator alignmentCalc(astContext, spirvOptions);
+    uint32_t stride = 0;
+    QualType bufferType = callExpr->getCallReturnType(astContext);
+    std::tie(alignment, std::ignore) =
+        alignmentCalc.getAlignmentAndSize(bufferType, SpirvLayoutRule::Scalar,
+                                          /*isRowMajor*/ llvm::None, &stride);
+  } else {
+    alignment = getRawBufferAlignment(callExpr->getArg(1));
+  }
   if (alignment == 0)
     return nullptr;
 
@@ -16327,9 +16346,22 @@ SpirvEmitter::processRawBufferStore(const CallExpr *callExpr) {
     return nullptr;
   }
 
-  uint32_t alignment = callExpr->getNumArgs() == 2
-                           ? 4
-                           : getRawBufferAlignment(callExpr->getArg(2));
+  uint32_t alignment = 0;
+  if (callExpr->getNumArgs() == 2) {
+    // Compute the required scalar alignment from the stored type.
+    // Per the Vulkan spec, PhysicalStorageBuffer alignment must be at least the
+    // largest scalar alignment within the type, this matches scalar layout
+    // rules. See:
+    // https://docs.vulkan.org/guide/latest/buffer_device_address_alignment.html
+    QualType bufferType = callExpr->getArg(1)->getType();
+    AlignmentSizeCalculator alignmentCalc(astContext, spirvOptions);
+    uint32_t stride = 0;
+    std::tie(alignment, std::ignore) =
+        alignmentCalc.getAlignmentAndSize(bufferType, SpirvLayoutRule::Scalar,
+                                          /*isRowMajor*/ llvm::None, &stride);
+  } else {
+    alignment = getRawBufferAlignment(callExpr->getArg(2));
+  }
   if (alignment == 0)
     return nullptr;
 
@@ -16775,7 +16807,8 @@ SpirvEmitter::doUnaryExprOrTypeTraitExpr(const UnaryExprOrTypeTraitExpr *expr) {
 }
 
 std::vector<SpirvInstruction *>
-SpirvEmitter::decomposeToScalars(SpirvInstruction *inst) {
+SpirvEmitter::decomposeToScalars(SpirvInstruction *inst,
+                                 bool includeMergedBitfields) {
   QualType elementType;
   uint32_t elementCount = 0;
   uint32_t numOfRows = 0;
@@ -16820,7 +16853,8 @@ SpirvEmitter::decomposeToScalars(SpirvInstruction *inst) {
       auto *element = spvBuilder.createCompositeExtract(
           elementType, inst, {i}, inst->getSourceLocation());
       element->setLayoutRule(inst->getLayoutRule());
-      auto decomposedElement = decomposeToScalars(element);
+      auto decomposedElement =
+          decomposeToScalars(element, includeMergedBitfields);
 
       // See how we can improve the performance by avoiding this copy.
       result.insert(result.end(), decomposedElement.begin(),
@@ -16840,20 +16874,22 @@ SpirvEmitter::decomposeToScalars(SpirvInstruction *inst) {
 
     forEachSpirvField(
         recordType, dyn_cast<StructType>(type),
-        [this, inst, &result](size_t spirvFieldIndex, const QualType &fieldType,
-                              const StructType::FieldInfo &fieldInfo) {
+        [this, inst, &result, includeMergedBitfields](
+            size_t spirvFieldIndex, const QualType &fieldType,
+            const StructType::FieldInfo &fieldInfo) {
           auto *field = spvBuilder.createCompositeExtract(
               fieldType, inst, {fieldInfo.fieldIndex},
               inst->getSourceLocation());
           field->setLayoutRule(inst->getLayoutRule());
-          auto decomposedField = decomposeToScalars(field);
+          auto decomposedField =
+              decomposeToScalars(field, includeMergedBitfields);
 
           // See how we can improve the performance by avoiding this copy.
           result.insert(result.end(), decomposedField.begin(),
                         decomposedField.end());
           return true;
         },
-        true);
+        includeMergedBitfields);
     return result;
   }
 

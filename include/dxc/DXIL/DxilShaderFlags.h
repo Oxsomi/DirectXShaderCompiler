@@ -227,6 +227,10 @@ public:
   UnusedResourceBinding GetUnusedResourceBinding() {
     return UnusedResourceBinding(m_UnusedResourceBinding);
   }
+  
+  // SM 6.10+
+  void SetLinearAlgebra(bool flag) { m_bLinearAlgebra = flag; }
+  bool GetLinearAlgebra() const { return m_bLinearAlgebra; }
 
 private:
   // Bit: 0
@@ -368,9 +372,14 @@ private:
   unsigned m_bRequiresGroup : 1; // SHADER_FEATURE_OPT_REQUIRES_GROUP
                                  // (OptFeatureInfo_RequiresGroup)
 
+  // SM 6.10+
+  // m_bLinearAlgebra indicates the shader uses LinearAlgebra features.
+  // Bit: 41
+  unsigned m_bLinearAlgebra : 1; // SHADER_FEATURE_LINEAR_ALGEBRA
+
   unsigned m_UnusedResourceBinding : 3;
 
-  uint32_t m_align1 : 20; // align to 64 bit.
+  uint32_t m_align1 : 19; // align to 64 bit.
 };
 
 } // namespace hlsl
