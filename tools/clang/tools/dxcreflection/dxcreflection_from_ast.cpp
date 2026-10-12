@@ -205,6 +205,43 @@ PushNextNodeId(uint32_t &NodeId, ReflectionData &Refl, const SourceManager &SM,
           return HLSL_REFL_ERR("Annotation count out of bounds");
 
         ++annotationCount;
+
+      } else if (const HLSLWaveSizeAttr *waveSizeAttr =
+                     dyn_cast<HLSLWaveSizeAttr>(attr)) {
+
+        if (Refl.Annotations.size() >= (1u << 16))
+          return HLSL_REFL_ERR("Out of annotations");
+
+        Refl.Annotations.push_back({});
+
+        // Spelled with the arguments the source gave: one size, or a range
+        // and the size preferred in it. An omitted argument is 0.
+
+        std::string waveSize =
+            "WaveSize(" + std::to_string(waveSizeAttr->getMin());
+
+        if (waveSizeAttr->getMax())
+          waveSize += ", " + std::to_string(waveSizeAttr->getMax());
+
+        if (waveSizeAttr->getPreferred())
+          waveSize += ", " + std::to_string(waveSizeAttr->getPreferred());
+
+        waveSize += ")";
+
+        uint32_t stringId;
+
+        if (ReflectionError err =
+                Refl.RegisterString(stringId, waveSize, true))
+          return err;
+
+        if (ReflectionError err = ReflectionAnnotation::Initialize(
+                Refl.Annotations.back(), stringId, true))
+          return err;
+
+        if (annotationCount >= uint8_t(-1))
+          return HLSL_REFL_ERR("Annotation count out of bounds");
+
+        ++annotationCount;
       }
 
       // TODO: Other types of attrs
